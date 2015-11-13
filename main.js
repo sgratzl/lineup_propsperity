@@ -32,14 +32,14 @@
       }
     });
   }
-  
+
   function splitGroups(columns) {
 	var first = columns[0];
-	var base = columns.filter(function(d) { 
-	  return d.type !== 'number'; 
+	var base = columns.filter(function(d) {
+	  return d.type !== 'number';
 	});
-	var scores = columns.filter(function(d) { 
-	  return d.type === 'number'; 
+	var scores = columns.filter(function(d) {
+	  return d.type === 'number';
 	});
 	var groups = {};
 	scores.forEach(function(score) {
@@ -56,18 +56,27 @@
 	var groups = splitGroups(desc.columns);
 	Object.keys(groups).forEach(function(g) { LineUpJS.deriveColors(groups[g]); });
     var provider = LineUpJS.createLocalStorage(_data, desc.columns);
-	
-	
+
+
 	Object.keys(groups).reverse().forEach(function(g, i) {
 		var r = provider.pushRanking();
 		if (i > 0) {
 			provider.push(r, desc.columns[0]);
 		}
-		groups[g].forEach(function(s) {
-			provider.push(r,s);
-		});		 
+		groups[g].filter(function(s) { return s.type !== 'number'; }).forEach(function(s) {
+			var col = provider.push(r,s);
+      if (col.desc.column === 'iso') {
+        col.setWidth(50);
+      }
+		});
+    var stacked = provider.push(r,LineUpJS.model.StackColumn.desc(g));
+    groups[g].filter(function(s) { return s.type === 'number'; }).forEach(function(s) {
+			stacked.push(provider.create(s));
+		});
+    stacked.setWidth(300);
+    stacked.sortByMe();
 	});
-	
+
     lineUpDemoConfig.name = name;
     if (lineup) {
       lineup.changeDataStorage(provider, desc);
