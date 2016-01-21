@@ -13,7 +13,7 @@
     "tests"
   ],
   "dependencies": {
-    "lineupjs": "https://github.com/sgratzl/lineup.js.git",
+    "lineupjs": "https://github.com/Caleydo/lineup.js.git",
     "bootstrap": "~3.3.5"
   }
 }

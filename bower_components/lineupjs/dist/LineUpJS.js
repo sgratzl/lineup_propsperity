@@ -1,8 +1,8 @@
-/*! LineUpJS - v0.1.0 - 2015-10-19
-* https://github.com/Caleydo/lineup.js
-* Copyright (c) 2015 ; Licensed BSD */
+/*! LineUpJS - v0.2.0 - 2016-01-15
+* https://github.com/sgratzl/lineup.js
+* Copyright (c) 2016 ; Licensed BSD */
 
-//based on https://github.com/ForbesLindesay/umd but with d3 dependency
+//based on https://github.com/ForbesLindesay/umd but with a custom list of external dependencies
 ;(function (f) {
   // CommonJS
   if (typeof exports === "object" && typeof module !== "undefined") {
@@ -35,16 +35,11 @@
 
 })(function (require) {
   return  (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
-/**
- * Created by Samuel Gratzl on 14.08.2015.
- */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
-    __.prototype = b.prototype;
-    d.prototype = new __();
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
 };
-///<reference path='../typings/tsd.d.ts' />
 var model_ = require('./model');
 var provider_ = require('./provider');
 var renderer_ = require('./renderer');
@@ -70,6 +65,10 @@ var LineUp = (function (_super) {
             numberformat: d3.format('.3n'),
             htmlLayout: {
                 headerHeight: 20,
+                headerHistogramHeight: 40,
+                autoRotateLabels: false,
+                rotationHeight: 50,
+                rotationDegree: -20,
                 headerOffset: 1,
                 buttonTopPadding: 10,
                 labelLeftPadding: 5
@@ -77,7 +76,9 @@ var LineUp = (function (_super) {
             renderingOptions: {
                 stacked: false,
                 animation: true,
-                visibleRowsOnly: true
+                visibleRowsOnly: true,
+                histograms: false,
+                meanLine: false,
             },
             svgLayout: {
                 rowHeight: 17,
@@ -86,13 +87,18 @@ var LineUp = (function (_super) {
                 visibleRowsOnly: true,
                 backupScrollRows: 4,
                 animationDuration: 1000,
+                freezeCols: 0,
                 rowActions: []
             },
             manipulative: true,
             interaction: {
                 tooltips: true,
-                multiselect: function () { return false; },
-                rangeselect: function () { return false; }
+                multiselect: function () {
+                    return false;
+                },
+                rangeselect: function () {
+                    return false;
+                }
             },
             pool: false
         };
@@ -106,18 +112,27 @@ var LineUp = (function (_super) {
         this.data.on('selectionChanged.main', this.triggerSelection.bind(this));
         this.header = new ui_.HeaderRenderer(data, this.node, {
             manipulative: this.config.manipulative,
-            headerHeight: this.config.htmlLayout.headerHeight
+            headerHeight: this.config.htmlLayout.headerHeight,
+            headerHistogramHeight: this.config.htmlLayout.headerHistogramHeight,
+            histograms: this.config.renderingOptions.histograms,
+            autoRotateLabels: this.config.htmlLayout.autoRotateLabels,
+            rotationHeight: this.config.htmlLayout.rotationHeight,
+            rotationDegree: this.config.htmlLayout.rotationDegree,
+            freezeCols: this.config.svgLayout.freezeCols
         });
         this.body = new ui_.BodyRenderer(data, this.node, this.slice.bind(this), {
             rowHeight: this.config.svgLayout.rowHeight,
             rowPadding: this.config.svgLayout.rowPadding,
             rowBarPadding: this.config.svgLayout.rowBarPadding,
             animationDuration: this.config.svgLayout.animationDuration,
+            meanLine: this.config.renderingOptions.meanLine,
             animation: this.config.renderingOptions.animation,
             stacked: this.config.renderingOptions.stacked,
             actions: this.config.svgLayout.rowActions,
-            idPrefix: this.config.idPrefix
+            idPrefix: this.config.idPrefix,
+            freezeCols: this.config.svgLayout.freezeCols
         });
+        this.body.histCache = this.header.sharedHistCache;
         this.forward(this.body, 'hoverChanged');
         if (this.config.pool && this.config.manipulative) {
             this.addPool(new ui_.PoolRenderer(data, this.node, this.config));
@@ -126,10 +141,14 @@ var LineUp = (function (_super) {
             this.contentScroller = new utils_.ContentScroller(this.$container.node(), this.body.node, {
                 backupRows: this.config.svgLayout.backupScrollRows,
                 rowHeight: this.config.svgLayout.rowHeight,
-                topShift: this.config.htmlLayout.headerHeight
+                topShift: function () { return _this.header.currentHeight(); }
             });
             this.contentScroller.on('scroll', function (top, left) {
                 _this.header.$node.style('transform', 'translate(' + 0 + 'px,' + top + 'px)');
+                if (_this.config.svgLayout.freezeCols > 0) {
+                    _this.header.updateFreeze(left);
+                    _this.body.updateFreeze(left);
+                }
             });
             this.contentScroller.on('redraw', this.body.update.bind(this.body));
         }
@@ -227,8 +246,9 @@ function deriveColors(columns) {
     return columns;
 }
 exports.deriveColors = deriveColors;
-function createLocalStorage(data, columns) {
-    return new provider_.LocalDataProvider(data, columns);
+function createLocalStorage(data, columns, options) {
+    if (options === void 0) { options = {}; }
+    return new provider_.LocalDataProvider(data, columns, options);
 }
 exports.createLocalStorage = createLocalStorage;
 function create(data, container, config) {
@@ -238,271 +258,257 @@ function create(data, container, config) {
 exports.create = create;
 
 },{"./model":3,"./provider":4,"./renderer":5,"./ui":6,"./ui_dialogs":7,"./utils":8,"d3":undefined}],2:[function(require,module,exports){
-/**
- * Created by Samuel Gratzl on 14.08.2015.
- */
-///<reference path='../typings/tsd.d.ts' />
 var d3 = require('d3');
 var utils = require('./utils');
+var model = require('./model');
 'use strict';
-function addLine($svg, x1, y1, x2, y2, clazz) {
-    return $svg.append('line').attr({
-        x1: x1, y1: y1, x2: x2, y2: y2, 'class': clazz
+function clamp(v, min, max) {
+    return Math.max(Math.min(v, max), min);
+}
+var MappingEditor = (function () {
+    function MappingEditor(parent, scale_, original, dataPromise, options) {
+        if (options === void 0) { options = {}; }
+        this.parent = parent;
+        this.scale_ = scale_;
+        this.original = original;
+        this.dataPromise = dataPromise;
+        this.options = {
+            width: 320,
+            height: 200,
+            padding_hor: 5,
+            padding_ver: 5,
+            radius: 5,
+            callback: function (d) { return d; },
+            callbackThisArg: null,
+            triggerCallback: 'change'
+        };
+        utils.merge(this.options, options);
+        this.scale_ = scale_.clone();
+        this.build(d3.select(parent));
+    }
+    Object.defineProperty(MappingEditor.prototype, "scale", {
+        get: function () {
+            return this.scale_;
+        },
+        enumerable: true,
+        configurable: true
     });
-}
-function addText($svg, x, y, text, dy, clazz) {
-    return $svg.append('text').attr({
-        x: x, y: y, dy: dy, 'class': clazz
-    }).text(text);
-}
-function addCircle($svg, x, shift, y, radius) {
-    shift -= x;
-    return $svg
-        .append('circle')
-        .attr({
-        'class': 'handle',
-        r: radius,
-        cx: x,
-        cy: y,
-        transform: 'translate(' + shift + ',0)'
-    });
-}
-function open(scale, dataDomain, dataPromise, options) {
-    options = utils.merge({
-        width: 320,
-        height: 250,
-        padding_hor: 10,
-        padding_ver: 30,
-        radius: 8,
-        callback: function (d) { return d; },
-        callbackThisArg: null,
-        triggerCallback: 'change'
-    }, options);
-    var editor = function ($root) {
-        var $svg = $root.append('svg').attr({
-            'class': 'lugui-me',
-            width: options.width,
-            height: options.height
+    MappingEditor.prototype.build = function ($root) {
+        var options = this.options, that = this;
+        $root = $root.append('div').classed('lugui-me', true);
+        $root.node().innerHTML = "<div>\n    <span class=\"raw_min\">0</span>\n    <span class=\"center\"><label><select>\n        <option value=\"linear\">Linear</option>\n        <option value=\"linear_invert\">Invert</option>\n        <option value=\"linear_abs\">Absolute</option>\n        <option value=\"log\">Log</option>\n        <option value=\"pow1.1\">Pow 1.1</option>\n        <option value=\"pow2\">Pow 2</option>\n        <option value=\"pow3\">Pow 3</option>\n        <option value=\"sqrt\">Sqrt</option>\n        <option value=\"script\">Custom Script</option>\n      </select></label>\n      </span>\n    <span class=\"raw_max\">1</span>\n  </div>\n  <svg width=\"" + options.width + "\" height=\"" + options.height + "\">\n    <rect width=\"100%\" height=\"10\"></rect>\n    <rect width=\"100%\" height=\"10\" y=\"" + (options.height - 10) + "\"></rect>\n    <g transform=\"translate(" + options.padding_hor + "," + options.padding_ver + ")\">\n      <g class=\"samples\">\n\n      </g>\n      <g class=\"mappings\">\n\n      </g>\n    </g>\n  </svg>\n  <div>\n    <input type=\"text\" class=\"raw_min\" value=\"0\">\n    <span class=\"center\">Raw</span>\n    <input type=\"text\" class=\"raw_max\" value=\"1\">\n  </div>\n  <div class=\"script\">\n    <textarea>\n\n    </textarea>\n    <button>Apply</button>\n  </div>";
+        var width = options.width - options.padding_hor * 2;
+        var height = options.height - options.padding_ver * 2;
+        var raw2pixel = d3.scale.linear().domain([Math.min(this.scale.domain[0], this.original.domain[0]), Math.min(this.scale.domain[1], this.original.domain[1])])
+            .range([0, width]);
+        var normal2pixel = d3.scale.linear().domain([0, 1])
+            .range([0, width]);
+        $root.select('input.raw_min')
+            .property('value', raw2pixel.domain()[0])
+            .on('blur', function () {
+            var d = raw2pixel.domain();
+            d[0] = parseFloat(this.value);
+            raw2pixel.domain(d);
+            updateRaw();
         });
-        var lowerLimitX = options.padding_hor;
-        var upperLimitX = options.width - options.padding_hor;
-        var scoreAxisY = options.padding_ver;
-        var raw2pixelAxisY = options.height - options.padding_ver;
-        var raw2pixel = d3.scale.linear().domain([Math.min(dataDomain[0], scale.domain()[0]), Math.min(dataDomain[1], scale.domain()[1])]).range([lowerLimitX, upperLimitX]);
-        var normal2pixel = d3.scale.linear().domain([0, 1]).range([lowerLimitX, upperLimitX]);
-        var lowerNormalized = normal2pixel(scale.range()[0]);
-        var upperNormalized = normal2pixel(scale.range()[1]);
-        var lowerRaw = raw2pixel(scale.domain()[0]);
-        var upperRaw = raw2pixel(scale.domain()[1]);
-        scale = d3.scale.linear()
-            .clamp(true)
-            .domain(scale.domain())
-            .range([lowerNormalized, upperNormalized]);
-        var $base = $svg.append('g');
-        addLine($base, lowerLimitX, scoreAxisY, upperLimitX, scoreAxisY, 'axis');
-        addText($base, lowerLimitX, scoreAxisY - 25, 0, '.75em');
-        addText($base, upperLimitX, scoreAxisY - 25, 1, '.75em');
-        addText($base, options.width / 2, scoreAxisY - 25, 'Score', '.75em', 'centered');
-        addLine($base, lowerLimitX, raw2pixelAxisY, upperLimitX, raw2pixelAxisY, 'axis');
-        addText($base, lowerLimitX, raw2pixelAxisY + 20, raw2pixel.domain()[0], '.75em')
-            .on('click', editLimit(0))
-            .classed('editableLabel', true)
-            .append('title').text('Click to Modify');
-        addText($base, upperLimitX, raw2pixelAxisY + 20, raw2pixel.domain()[1], '.75em')
-            .on('click', editLimit(1))
-            .classed('editableLabel', true)
-            .append('title').text('Click to Modify');
-        addText($base, options.width / 2, raw2pixelAxisY + 20, 'Raw', '.75em', 'centered');
-        var datalines = $svg.append('g').classed('data', true).selectAll('line').data([]);
-        dataPromise.then(function (data) {
+        $root.select('input.raw_max')
+            .property('value', raw2pixel.domain()[1])
+            .on('blur', function () {
+            var d = raw2pixel.domain();
+            d[1] = parseFloat(this.value);
+            raw2pixel.domain(d);
+            updateRaw();
+        });
+        var datalines = $root.select('g.samples').selectAll('line').data([]);
+        this.dataPromise.then(function (data) {
+            data = d3.set(data.map(String)).values().map(parseFloat);
             datalines = datalines.data(data);
-            datalines.enter().append('line')
+            datalines.enter()
+                .append('line')
                 .attr({
-                x1: scale,
-                y1: scoreAxisY,
+                x1: function (d) { return normal2pixel(that.scale.apply(d)); },
+                y1: 0,
                 x2: raw2pixel,
-                y2: raw2pixelAxisY
+                y2: height
             }).style('visibility', function (d) {
-                var a;
-                if (lowerRaw < upperRaw) {
-                    a = (raw2pixel(d) < lowerRaw || raw2pixel(d) > upperRaw);
-                }
-                else {
-                    a = (raw2pixel(d) > lowerRaw || raw2pixel(d) < upperRaw);
-                }
-                return a ? 'hidden' : null;
+                var domain = that.scale.domain;
+                return (d < domain[0] || d > domain[domain.length - 1]) ? 'hidden' : null;
             });
         });
-        var mapperLineLowerBounds = addLine($svg, lowerNormalized, scoreAxisY, lowerRaw, raw2pixelAxisY, 'bound');
-        var mapperLineUpperBounds = addLine($svg, upperNormalized, scoreAxisY, upperRaw, raw2pixelAxisY, 'bound');
-        var lowerBoundNormalizedLabel = addText($svg, lowerLimitX + 5, scoreAxisY - 15, d3.round(normal2pixel.invert(lowerNormalized), 2), '.25em', 'drag').attr('transform', 'translate(' + (lowerNormalized - lowerLimitX) + ',0)');
-        var lowerBoundRawLabel = addText($svg, lowerLimitX + 5, raw2pixelAxisY - 15, d3.round(raw2pixel.invert(lowerRaw), 2), '.25em', 'drag').attr('transform', 'translate(' + (lowerRaw - lowerLimitX) + ',0)');
-        var upperBoundNormalizedLabel = addText($svg, upperLimitX + 5, scoreAxisY - 15, d3.round(normal2pixel.invert(upperNormalized), 2), '.25em', 'drag').attr('transform', 'translate(' + (upperNormalized - upperLimitX) + ',0)');
-        var upperBoundRawLabel = addText($svg, upperLimitX + 5, raw2pixelAxisY - 15, d3.round(raw2pixel.invert(upperRaw), 2), '.25em', 'drag').attr('transform', 'translate(' + (upperRaw - upperLimitX) + ',0)');
-        function createDrag(label, move) {
+        function updateDataLines() {
+            datalines.attr({
+                x1: function (d) { return normal2pixel(that.scale.apply(d)); },
+                x2: raw2pixel
+            }).style('visibility', function (d) {
+                var domain = that.scale.domain;
+                return (d < domain[0] || d > domain[domain.length - 1]) ? 'hidden' : null;
+            });
+        }
+        function createDrag(move) {
             return d3.behavior.drag()
                 .on('dragstart', function () {
                 d3.select(this)
                     .classed('dragging', true)
                     .attr('r', options.radius * 1.1);
-                label.style('visibility', 'visible');
             })
                 .on('drag', move)
                 .on('dragend', function () {
                 d3.select(this)
                     .classed('dragging', false)
                     .attr('r', options.radius);
-                label.style('visibility', null);
-                updateScale(true);
-            })
-                .origin(function () {
-                var t = d3.transform(d3.select(this).attr('transform'));
-                return { x: t.translate[0], y: t.translate[1] };
+                triggerUpdate(true);
             });
         }
-        function updateNormalized() {
-            scale.range([lowerNormalized, upperNormalized]);
-            datalines.attr('x1', scale);
-            updateScale();
-        }
-        function updateRaw() {
-            var hiddenDatalines, shownDatalines;
-            if (lowerRaw < upperRaw) {
-                hiddenDatalines = datalines.filter(function (d) {
-                    return (raw2pixel(d) < lowerRaw || raw2pixel(d) > upperRaw);
-                });
-                shownDatalines = datalines.filter(function (d) {
-                    return !(raw2pixel(d) < lowerRaw || raw2pixel(d) > upperRaw);
-                });
-            }
-            else {
-                hiddenDatalines = datalines.filter(function (d) {
-                    return (raw2pixel(d) > lowerRaw || raw2pixel(d) < upperRaw);
-                });
-                shownDatalines = datalines.filter(function (d) {
-                    return !(raw2pixel(d) > lowerRaw || raw2pixel(d) < upperRaw);
-                });
-            }
-            hiddenDatalines.style('visibility', 'hidden');
-            scale.domain([raw2pixel.invert(lowerRaw), raw2pixel.invert(upperRaw)]);
-            shownDatalines
-                .style('visibility', null)
-                .attr('x1', scale);
-            updateScale();
-        }
-        addCircle($svg, lowerLimitX, lowerNormalized, scoreAxisY, options.radius)
-            .call(createDrag(lowerBoundNormalizedLabel, function () {
-            if (d3.event.x >= 0 && d3.event.x <= (upperLimitX - lowerLimitX)) {
-                mapperLineLowerBounds.attr('x1', lowerLimitX + d3.event.x);
-                d3.select(this)
-                    .attr('transform', 'translate(' + d3.event.x + ', 0)');
-                lowerNormalized = d3.event.x + lowerLimitX;
-                lowerBoundNormalizedLabel
-                    .text(d3.round(normal2pixel.invert(lowerNormalized), 2))
-                    .attr('transform', 'translate(' + d3.event.x + ', 0)');
-                updateNormalized();
-            }
-        }));
-        addCircle($svg, upperLimitX, upperNormalized, scoreAxisY, options.radius)
-            .call(createDrag(upperBoundNormalizedLabel, function () {
-            if (d3.event.x >= (-1 * (upperLimitX - lowerLimitX)) && d3.event.x <= 0) {
-                mapperLineUpperBounds.attr('x1', upperLimitX + d3.event.x);
-                d3.select(this)
-                    .attr('transform', 'translate(' + d3.event.x + ', 0)');
-                upperNormalized = d3.event.x + upperLimitX;
-                upperBoundNormalizedLabel
-                    .text(d3.round(normal2pixel.invert(upperNormalized), 2))
-                    .attr('transform', 'translate(' + d3.event.x + ', 0)');
-                updateNormalized();
-            }
-        }));
-        var $lowRawCircle = addCircle($svg, lowerLimitX, lowerRaw, raw2pixelAxisY, options.radius)
-            .call(createDrag(lowerBoundRawLabel, function () {
-            if (d3.event.x >= 0 && d3.event.x <= (upperLimitX - lowerLimitX)) {
-                mapperLineLowerBounds.attr('x2', lowerLimitX + d3.event.x);
-                d3.select(this)
-                    .attr('transform', 'translate(' + d3.event.x + ', 0)');
-                lowerRaw = d3.event.x + lowerLimitX;
-                lowerBoundRawLabel
-                    .text(d3.round(raw2pixel.invert(lowerRaw), 2))
-                    .attr('transform', 'translate(' + d3.event.x + ', 0)');
-                updateRaw();
-            }
-        }));
-        var $upperRawCircle = addCircle($svg, upperLimitX, upperRaw, raw2pixelAxisY, options.radius)
-            .call(createDrag(upperBoundRawLabel, function () {
-            if (d3.event.x >= (-1 * (upperLimitX - lowerLimitX)) && d3.event.x <= 0) {
-                mapperLineUpperBounds.attr('x2', upperLimitX + d3.event.x);
-                d3.select(this)
-                    .attr('transform', 'translate(' + d3.event.x + ', 0)');
-                upperRaw = d3.event.x + upperLimitX;
-                upperBoundRawLabel
-                    .text(d3.round(raw2pixel.invert(upperRaw), 2))
-                    .attr('transform', 'translate(' + d3.event.x + ', 0)');
-                updateRaw();
-            }
-        }));
-        function updateScale(isDragEnd) {
-            if (isDragEnd === void 0) { isDragEnd = false; }
-            if (isDragEnd !== (options.triggerCallback === 'dragend')) {
+        var mapping_lines = [];
+        function renderMappingLines() {
+            if (!(that.scale instanceof model.ScaleMappingFunction)) {
                 return;
             }
-            var newScale = d3.scale.linear()
-                .domain([raw2pixel.invert(lowerRaw), raw2pixel.invert(upperRaw)])
-                .range([normal2pixel.invert(lowerNormalized), normal2pixel.invert(upperNormalized)]);
-            options.callback.call(options.callbackThisArg, newScale);
-        }
-        function editLimit(index) {
-            return function () {
-                var $elem = d3.select(this);
-                var $input = $base.append('foreignObject').attr({
-                    x: (index === 0 ? lowerLimitX - 7 : upperLimitX - 45),
-                    y: raw2pixelAxisY + 15,
-                    width: 50,
-                    height: 20
-                });
-                function update() {
-                    var old = raw2pixel.domain();
-                    var new_ = old.slice();
-                    new_[index] = +this.value;
-                    if (old[index] === new_[index]) {
-                        return;
-                    }
-                    raw2pixel.domain(new_);
-                    $elem.text(this.value);
-                    lowerRaw = raw2pixel(scale.domain()[0]);
-                    upperRaw = raw2pixel(scale.domain()[1]);
-                    $lowRawCircle.attr('transform', 'translate(' + (lowerRaw - lowerLimitX) + ',0)');
-                    $upperRawCircle.attr('transform', 'translate(' + (upperRaw - upperLimitX) + ',0)');
-                    mapperLineLowerBounds.attr('x2', lowerRaw);
-                    mapperLineUpperBounds.attr('x2', upperRaw);
-                    datalines.attr('x2', raw2pixel);
-                    updateRaw();
-                    updateScale(true);
-                    $input.remove();
+            var sscale = that.scale;
+            var domain = sscale.domain;
+            var range = sscale.range;
+            mapping_lines = domain.map(function (d, i) { return ({ r: d, n: range[i] }); });
+            function updateScale() {
+                mapping_lines.sort(function (a, b) { return a.r - b.r; });
+                sscale.domain = mapping_lines.map(function (d) { return d.r; });
+                sscale.range = mapping_lines.map(function (d) { return d.n; });
+                updateDataLines();
+            }
+            function removePoint(i) {
+                if (mapping_lines.length <= 2) {
+                    return;
                 }
-                $input.append('xhtml:input')
-                    .attr('value', raw2pixel.domain()[index])
-                    .style('width', '5em')
-                    .on('change', update)
-                    .on('blur', update);
-            };
+                mapping_lines.splice(i, 1);
+                updateScale();
+                renderMappingLines();
+            }
+            function addPoint(x) {
+                x = clamp(x, 0, width);
+                mapping_lines.push({
+                    n: normal2pixel.invert(x),
+                    r: raw2pixel.invert(x)
+                });
+                updateScale();
+                renderMappingLines();
+            }
+            $root.selectAll('rect').on('click', function () {
+                addPoint(d3.mouse($root.select('svg > g').node())[0]);
+            });
+            var $mapping = $root.select('g.mappings').selectAll('g.mapping').data(mapping_lines);
+            var $mapping_enter = $mapping.enter().append('g').classed('mapping', true).on('contextmenu', function (d, i) {
+                d3.event.preventDefault();
+                d3.event.stopPropagation();
+                removePoint(i);
+            });
+            $mapping_enter.append('line').attr({
+                y1: 0,
+                y2: height
+            }).call(createDrag(function (d) {
+                var dx = d3.event.dx;
+                var nx = clamp(normal2pixel(d.n) + dx, 0, width);
+                var rx = clamp(raw2pixel(d.r) + dx, 0, width);
+                d.n = normal2pixel.invert(nx);
+                d.r = raw2pixel.invert(rx);
+                d3.select(this).attr('x1', nx).attr('x2', rx);
+                d3.select(this.parentElement).select('circle.normalized').attr('cx', nx);
+                d3.select(this.parentElement).select('circle.raw').attr('cx', rx);
+                updateScale();
+            }));
+            $mapping_enter.append('circle').classed('normalized', true).attr('r', options.radius).call(createDrag(function (d) {
+                var x = clamp(d3.event.x, 0, width);
+                d.n = normal2pixel.invert(x);
+                d3.select(this).attr('cx', x);
+                d3.select(this.parentElement).select('line').attr('x1', x);
+                updateScale();
+            }));
+            $mapping_enter.append('circle').classed('raw', true).attr('r', options.radius).attr('cy', height).call(createDrag(function (d) {
+                var x = clamp(d3.event.x, 0, width);
+                d.r = raw2pixel.invert(x);
+                d3.select(this).attr('cx', x);
+                d3.select(this.parentElement).select('line').attr('x2', x);
+                updateScale();
+            }));
+            $mapping.select('line').attr({
+                x1: function (d) { return normal2pixel(d.n); },
+                x2: function (d) { return raw2pixel(d.r); }
+            });
+            $mapping.select('circle.normalized').attr('cx', function (d) { return normal2pixel(d.n); });
+            $mapping.select('circle.raw').attr('cx', function (d) { return raw2pixel(d.r); });
+            $mapping.exit().remove();
         }
+        function renderScript() {
+            if (!(that.scale instanceof model.ScriptMappingFunction)) {
+                $root.select('div.script').style('display', 'none');
+                return;
+            }
+            $root.select('div.script').style('display', null);
+            var sscale = that.scale;
+            var $text = $root.select('textarea').text(sscale.code);
+            $root.select('div.script').select('button').on('click', function () {
+                var code = $text.property('value');
+                sscale.code = code;
+                updateDataLines();
+                triggerUpdate();
+            });
+        }
+        renderMappingLines();
+        renderScript();
+        function triggerUpdate(isDragEnd) {
+            if (isDragEnd === void 0) { isDragEnd = false; }
+            if (isDragEnd && (options.triggerCallback !== 'dragend')) {
+                return;
+            }
+            options.callback.call(options.callbackThisArg, that.scale.clone());
+        }
+        function updateRaw() {
+            var d = raw2pixel.domain();
+            $root.select('input.raw_min').property('value', d[0]);
+            $root.select('input.raw_max').property('value', d[1]);
+            updateDataLines();
+            renderMappingLines();
+        }
+        updateRaw();
+        $root.select('select').on('change', function () {
+            var v = this.value;
+            if (v === 'linear_invert') {
+                that.scale_ = new model.ScaleMappingFunction(raw2pixel.domain(), 'linear', [1, 0]);
+            }
+            else if (v === 'linear_abs') {
+                var d = raw2pixel.domain();
+                that.scale_ = new model.ScaleMappingFunction([d[0], (d[1] - d[0]) / 2, d[1]], 'linear', [1, 0, 1]);
+            }
+            else if (v === 'script') {
+                that.scale_ = new model.ScriptMappingFunction(raw2pixel.domain());
+            }
+            else {
+                that.scale_ = new model.ScaleMappingFunction(raw2pixel.domain(), v);
+            }
+            updateDataLines();
+            renderMappingLines();
+            renderScript();
+            triggerUpdate();
+        }).property('selectedIndex', function () {
+            var name = 'script';
+            if (that.scale_ instanceof model.ScaleMappingFunction) {
+                name = that.scale.scaleType;
+            }
+            var types = ['linear', 'linear_invert', 'linear_abs', 'log', 'pow1.1', 'pow2', 'pow3', 'sqrt', 'script'];
+            return types.indexOf(name);
+        });
     };
-    return editor;
+    return MappingEditor;
+})();
+function create(parent, scale, original, dataPromise, options) {
+    if (options === void 0) { options = {}; }
+    return new MappingEditor(parent, scale, original, dataPromise, options);
 }
-exports.open = open;
+exports.create = create;
 
-},{"./utils":8,"d3":undefined}],3:[function(require,module,exports){
-/**
- * Created by Samuel Gratzl on 06.08.2015.
- */
-///<reference path='../typings/tsd.d.ts' />
+},{"./model":3,"./utils":8,"d3":undefined}],3:[function(require,module,exports){
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
-    __.prototype = b.prototype;
-    d.prototype = new __();
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
 };
 var d3 = require('d3');
 var utils = require('./utils');
@@ -522,10 +528,19 @@ var Column = (function (_super) {
         this.desc = desc;
         this.width_ = 100;
         this.parent = null;
+        this._compressed = false;
         this.id = fixCSS(id);
         this.label = this.desc.label || this.id;
-        this.color = this.desc.color || Column.DEFAULT_COLOR;
+        this.cssClass = this.desc.cssClass || '';
+        this.color = this.desc.color || (this.cssClass !== '' ? null : Column.DEFAULT_COLOR);
     }
+    Object.defineProperty(Column.prototype, "headerCssClass", {
+        get: function () {
+            return this.desc.type;
+        },
+        enumerable: true,
+        configurable: true
+    });
     Column.prototype.assignNewId = function (idGenerator) {
         this.id = fixCSS(idGenerator());
     };
@@ -540,16 +555,30 @@ var Column = (function (_super) {
         configurable: true
     });
     Column.prototype.createEventList = function () {
-        return _super.prototype.createEventList.call(this).concat(['widthChanged', 'filterChanged', 'labelChanged', 'addColumn', 'removeColumn', 'dirty', 'dirtyHeader', 'dirtyValues']);
+        return _super.prototype.createEventList.call(this).concat(['widthChanged', 'filterChanged', 'labelChanged', 'compressChanged', 'addColumn', 'removeColumn', 'dirty', 'dirtyHeader', 'dirtyValues']);
     };
     Column.prototype.getWidth = function () {
         return this.width_;
     };
+    Object.defineProperty(Column.prototype, "compressed", {
+        get: function () {
+            return this._compressed;
+        },
+        set: function (value) {
+            if (this._compressed === value) {
+                return;
+            }
+            this.fire(['compressChanged', 'dirtyHeader', 'dirtyValues', 'dirty'], this._compressed, this._compressed = value);
+        },
+        enumerable: true,
+        configurable: true
+    });
     Column.prototype.flatten = function (r, offset, levelsToGo, padding) {
         if (levelsToGo === void 0) { levelsToGo = 0; }
         if (padding === void 0) { padding = 0; }
-        r.push({ col: this, offset: offset, width: this.getWidth() });
-        return this.getWidth();
+        var w = this.compressed ? Column.COMPRESSED_WIDTH : this.getWidth();
+        r.push({ col: this, offset: offset, width: w });
+        return w;
     };
     Column.prototype.setWidth = function (value) {
         if (this.width_ === value) {
@@ -608,12 +637,13 @@ var Column = (function (_super) {
         var r = {
             id: this.id,
             desc: toDescRef(this.desc),
-            width: this.width_
+            width: this.width_,
+            compressed: this.compressed
         };
         if (this.label !== (this.desc.label || this.id)) {
             r.label = this.label;
         }
-        if (this.color !== (this.desc.color || Column.DEFAULT_COLOR)) {
+        if (this.color !== (this.desc.color || Column.DEFAULT_COLOR) && this.color) {
             r.color = this.color;
         }
         return r;
@@ -622,6 +652,7 @@ var Column = (function (_super) {
         this.width_ = dump.width || this.width_;
         this.label = dump.label || this.label;
         this.color = dump.color || this.color;
+        this.compressed = dump.compressed === true;
     };
     Column.prototype.getLabel = function (row) {
         return '' + this.getValue(row);
@@ -640,6 +671,7 @@ var Column = (function (_super) {
     };
     Column.DEFAULT_COLOR = '#C1C1C1';
     Column.FLAT_ALL_COLUMNS = -1;
+    Column.COMPRESSED_WIDTH = 16;
     return Column;
 })(utils.AEventDispatcher);
 exports.Column = Column;
@@ -679,32 +711,206 @@ var DummyColumn = (function (_super) {
 })(Column);
 exports.DummyColumn = DummyColumn;
 function isNumberColumn(col) {
-    return (col instanceof Column && typeof col.getNumber === 'function' || (!(col instanceof Column) && col.type.match(/(number|stack|ordinal)/)));
+    return (col instanceof Column && typeof col.getNumber === 'function' || (!(col instanceof Column) && col.type.match(/(number|stack|ordinal)/) != null));
 }
 exports.isNumberColumn = isNumberColumn;
+function isCategoricalColumn(col) {
+    return (col instanceof Column && typeof col.getCategories === 'function' || (!(col instanceof Column) && col.type.match(/(categorical|ordinal)/) != null));
+}
+exports.isCategoricalColumn = isCategoricalColumn;
+function toScale(type) {
+    if (type === void 0) { type = 'linear'; }
+    switch (type) {
+        case 'log':
+            return d3.scale.log().clamp(true);
+        case 'sqrt':
+            return d3.scale.sqrt().clamp(true);
+        case 'pow1.1':
+            return d3.scale.pow().exponent(1.1).clamp(true);
+        case 'pow2':
+            return d3.scale.pow().exponent(2).clamp(true);
+        case 'pow3':
+            return d3.scale.pow().exponent(3).clamp(true);
+        default:
+            return d3.scale.linear().clamp(true);
+    }
+}
+function isSame(a, b) {
+    if (a.length !== b.length) {
+        return false;
+    }
+    return a.every(function (ai, i) { return ai === b[i]; });
+}
+function fixDomain(domain, type) {
+    if (type === 'log' && domain[0] === 0) {
+        domain[0] = 0.0000001;
+    }
+    return domain;
+}
+var ScaleMappingFunction = (function () {
+    function ScaleMappingFunction(domain, type, range) {
+        if (domain === void 0) { domain = [0, 1]; }
+        if (type === void 0) { type = 'linear'; }
+        if (range === void 0) { range = [0, 1]; }
+        this.type = type;
+        this.s = toScale(type).domain(fixDomain(domain, this.type)).range(range);
+    }
+    Object.defineProperty(ScaleMappingFunction.prototype, "domain", {
+        get: function () {
+            return this.s.domain();
+        },
+        set: function (domain) {
+            this.s.domain(fixDomain(domain, this.type));
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(ScaleMappingFunction.prototype, "range", {
+        get: function () {
+            return this.s.range();
+        },
+        set: function (range) {
+            this.s.range(range);
+        },
+        enumerable: true,
+        configurable: true
+    });
+    ScaleMappingFunction.prototype.apply = function (v) {
+        return this.s(v);
+    };
+    Object.defineProperty(ScaleMappingFunction.prototype, "scaleType", {
+        get: function () {
+            return this.type;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    ScaleMappingFunction.prototype.dump = function () {
+        return {
+            type: this.type,
+            domain: this.domain,
+            range: this.range
+        };
+    };
+    ScaleMappingFunction.prototype.eq = function (other) {
+        if (!(other instanceof ScaleMappingFunction)) {
+            return false;
+        }
+        var that = other;
+        return that.type === this.type && isSame(this.domain, that.domain) && isSame(this.range, that.range);
+    };
+    ScaleMappingFunction.prototype.restore = function (dump) {
+        this.type = dump.type;
+        this.s = toScale(dump.type).domain(dump.domain).range(dump.range);
+    };
+    ScaleMappingFunction.prototype.clone = function () {
+        return new ScaleMappingFunction(this.domain, this.type, this.range);
+    };
+    return ScaleMappingFunction;
+})();
+exports.ScaleMappingFunction = ScaleMappingFunction;
+var ScriptMappingFunction = (function () {
+    function ScriptMappingFunction(domain_, code_) {
+        if (domain_ === void 0) { domain_ = [0, 1]; }
+        if (code_ === void 0) { code_ = 'return this.linear(value,this.value_min,this.value_max);'; }
+        this.domain_ = domain_;
+        this.code_ = code_;
+        this.f = new Function('value', code_);
+    }
+    Object.defineProperty(ScriptMappingFunction.prototype, "domain", {
+        get: function () {
+            return this.domain_;
+        },
+        set: function (domain) {
+            this.domain_ = domain;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(ScriptMappingFunction.prototype, "code", {
+        get: function () {
+            return this.code_;
+        },
+        set: function (code) {
+            if (this.code_ === code) {
+                return;
+            }
+            this.code_ = code;
+            this.f = new Function('value', code);
+        },
+        enumerable: true,
+        configurable: true
+    });
+    ScriptMappingFunction.prototype.apply = function (v) {
+        var min = this.domain_[0], max = this.domain_[this.domain_.length - 1];
+        var r = this.f.call({
+            value_min: min,
+            value_max: max,
+            value_range: max - min,
+            value_domain: this.domain_.slice(),
+            linear: function (v, mi, ma) { return (v - mi) / (ma - mi); }
+        }, v);
+        if (typeof r === 'number') {
+            return Math.max(Math.min(r, 1), 0);
+        }
+        return NaN;
+    };
+    ScriptMappingFunction.prototype.dump = function () {
+        return {
+            type: 'script',
+            code: this.code
+        };
+    };
+    ScriptMappingFunction.prototype.eq = function (other) {
+        if (!(other instanceof ScriptMappingFunction)) {
+            return false;
+        }
+        var that = other;
+        return that.code === this.code;
+    };
+    ScriptMappingFunction.prototype.restore = function (dump) {
+        this.code = dump.code;
+    };
+    ScriptMappingFunction.prototype.clone = function () {
+        return new ScriptMappingFunction(this.domain, this.code);
+    };
+    return ScriptMappingFunction;
+})();
+exports.ScriptMappingFunction = ScriptMappingFunction;
+function createMappingFunction(dump) {
+    if (dump.type === 'script') {
+        var s = new ScriptMappingFunction();
+        s.restore(dump);
+        return s;
+    }
+    else {
+        var l = new ScaleMappingFunction();
+        l.restore(dump);
+        return l;
+    }
+}
+exports.createMappingFunction = createMappingFunction;
 var NumberColumn = (function (_super) {
     __extends(NumberColumn, _super);
     function NumberColumn(id, desc) {
         _super.call(this, id, desc);
         this.missingValue = 0;
-        this.scale = d3.scale.linear().domain([NaN, NaN]).range([0, 1]).clamp(true);
-        this.original = d3.scale.linear().domain([NaN, NaN]).range([0, 1]).clamp(true);
         this.filter_ = { min: -Infinity, max: Infinity };
-        if (desc.domain) {
-            this.scale.domain(desc.domain);
+        if (desc.map) {
+            this.mapping = createMappingFunction(desc.map);
         }
-        if (desc.range) {
-            this.scale.range(desc.range);
+        else if (desc.domain) {
+            this.mapping = new ScaleMappingFunction(desc.domain, 'linear', desc.range || [0, 1]);
         }
-        this.original.domain(this.scale.domain()).range(this.scale.range());
+        this.original = this.mapping.clone();
     }
     NumberColumn.prototype.init = function (callback) {
         var _this = this;
-        var d = this.scale.domain();
+        var d = this.mapping.domain;
         if (isNaN(d[0]) || isNaN(d[1])) {
             return callback(this.desc).then(function (stats) {
-                _this.scale.domain([stats.min, stats.max]);
-                _this.original.domain(_this.scale.domain());
+                _this.mapping.domain = [stats.min, stats.max];
+                _this.original.domain = [stats.min, stats.max];
                 return true;
             });
         }
@@ -712,23 +918,18 @@ var NumberColumn = (function (_super) {
     };
     NumberColumn.prototype.dump = function (toDescRef) {
         var r = _super.prototype.dump.call(this, toDescRef);
-        r.domain = this.scale.domain();
-        r.range = this.scale.range();
-        r.mapping = this.getOriginalMapping();
+        r.map = this.mapping.dump();
         r.filter = this.filter;
         r.missingValue = this.missingValue;
         return r;
     };
     NumberColumn.prototype.restore = function (dump, factory) {
         _super.prototype.restore.call(this, dump, factory);
-        if (dump.domain) {
-            this.scale.domain(dump.domain);
+        if (dump.map) {
+            this.mapping = createMappingFunction(dump.map);
         }
-        if (dump.range) {
-            this.scale.range(dump.range);
-        }
-        if (dump.mapping) {
-            this.original.domain(dump.mapping.domain).range(dump.mapping.range);
+        else if (dump.domain) {
+            this.mapping = new ScaleMappingFunction(dump.domain, 'linear', dump.range || [0, 1]);
         }
         if (dump.filter) {
             this.filter_ = dump.filter;
@@ -755,7 +956,7 @@ var NumberColumn = (function (_super) {
         if (isNaN(v)) {
             return v;
         }
-        return this.scale(v);
+        return this.mapping.apply(v);
     };
     NumberColumn.prototype.getNumber = function (row) {
         return this.getValue(row);
@@ -763,22 +964,17 @@ var NumberColumn = (function (_super) {
     NumberColumn.prototype.compare = function (a, b) {
         return numberCompare(this.getValue(a), this.getValue(b));
     };
-    NumberColumn.prototype.getMapping = function () {
-        return {
-            domain: this.scale.domain(),
-            range: this.scale.range()
-        };
-    };
     NumberColumn.prototype.getOriginalMapping = function () {
-        return {
-            domain: this.original.domain(),
-            range: this.original.range()
-        };
+        return this.original.clone();
     };
-    NumberColumn.prototype.setMapping = function (domain, range) {
-        var bak = this.getMapping();
-        this.scale.domain(domain).range(range);
-        this.fire(['mappingChanged', 'dirtyValues', 'dirty'], bak, this.getMapping());
+    NumberColumn.prototype.getMapping = function () {
+        return this.mapping.clone();
+    };
+    NumberColumn.prototype.setMapping = function (mapping) {
+        if (this.mapping.eq(mapping)) {
+            return;
+        }
+        this.fire(['mappingChanged', 'dirtyValues', 'dirty'], this.mapping.clone(), this.mapping = mapping);
     };
     NumberColumn.prototype.isFiltered = function () {
         return isFinite(this.filter_.min) || isFinite(this.filter_.max);
@@ -836,8 +1032,17 @@ var StringColumn = (function (_super) {
     function StringColumn(id, desc) {
         _super.call(this, id, desc);
         this.filter_ = null;
+        this._alignment = 'left';
         this.setWidthImpl(200);
+        this._alignment = desc.alignment || 'left';
     }
+    Object.defineProperty(StringColumn.prototype, "alignment", {
+        get: function () {
+            return this._alignment;
+        },
+        enumerable: true,
+        configurable: true
+    });
     StringColumn.prototype.getValue = function (row) {
         var v = _super.prototype.getValue.call(this, row);
         if (typeof (v) === 'undefined' || v == null) {
@@ -853,6 +1058,7 @@ var StringColumn = (function (_super) {
         else {
             r.filter = this.filter_;
         }
+        r.alignment = this.alignment;
         return r;
     };
     StringColumn.prototype.restore = function (dump, factory) {
@@ -863,6 +1069,7 @@ var StringColumn = (function (_super) {
         else {
             this.filter_ = dump.filter || null;
         }
+        this._alignment = dump.alignment || this._alignment;
     };
     StringColumn.prototype.isFiltered = function () {
         return this.filter_ != null;
@@ -902,12 +1109,51 @@ var LinkColumn = (function (_super) {
         this.link = null;
         this.link = desc.link;
     }
+    Object.defineProperty(LinkColumn.prototype, "headerCssClass", {
+        get: function () {
+            return this.link == null ? 'link' : 'link link_pattern';
+        },
+        enumerable: true,
+        configurable: true
+    });
+    LinkColumn.prototype.createEventList = function () {
+        return _super.prototype.createEventList.call(this).concat(['linkChanged']);
+    };
+    LinkColumn.prototype.setLink = function (link) {
+        if (link == this.link) {
+            return;
+        }
+        this.fire(['linkChanged', 'dirtyHeader', 'dirtyValues', 'dirty'], this.link, this.link = link);
+    };
+    LinkColumn.prototype.getLink = function () {
+        return this.link || '';
+    };
+    LinkColumn.prototype.dump = function (toDescRef) {
+        var r = _super.prototype.dump.call(this, toDescRef);
+        if (this.link != this.desc.link) {
+            r.link = this.link;
+        }
+        return r;
+    };
+    LinkColumn.prototype.restore = function (dump, factory) {
+        _super.prototype.restore.call(this, dump, factory);
+        if (dump.link) {
+            this.link = dump.link;
+        }
+    };
     LinkColumn.prototype.getLabel = function (row) {
         var v = _super.prototype.getValue.call(this, row);
         if (v.alt) {
             return v.alt;
         }
         return '' + v;
+    };
+    LinkColumn.prototype.isLink = function (row) {
+        if (this.link) {
+            return true;
+        }
+        var v = _super.prototype.getValue.call(this, row);
+        return v.href != null;
     };
     LinkColumn.prototype.getValue = function (row) {
         var v = _super.prototype.getValue.call(this, row);
@@ -975,6 +1221,8 @@ var CategoricalColumn = (function (_super) {
         _super.call(this, id, desc);
         this.colors = d3.scale.category10();
         this.filter_ = null;
+        this.separator = ';';
+        this.separator = desc.separator || this.separator;
         this.initCategories(desc);
     }
     CategoricalColumn.prototype.initCategories = function (desc) {
@@ -1006,22 +1254,50 @@ var CategoricalColumn = (function (_super) {
         enumerable: true,
         configurable: true
     });
+    CategoricalColumn.prototype.colorOf = function (cat) {
+        return this.colors(cat);
+    };
+    CategoricalColumn.prototype.getLabel = function (row) {
+        return '' + StringColumn.prototype.getValue.call(this, row);
+    };
+    CategoricalColumn.prototype.getFirstLabel = function (row) {
+        var l = this.getLabels(row);
+        return l.length > 0 ? l[0] : null;
+    };
+    CategoricalColumn.prototype.getLabels = function (row) {
+        var v = StringColumn.prototype.getValue.call(this, row);
+        var r = v.split(this.separator);
+        return r;
+    };
     CategoricalColumn.prototype.getValue = function (row) {
-        return StringColumn.prototype.getValue.call(this, row);
+        var r = this.getValues(row);
+        return r.length > 0 ? r[0] : null;
+    };
+    CategoricalColumn.prototype.getValues = function (row) {
+        var v = StringColumn.prototype.getValue.call(this, row);
+        var r = v.split(this.separator);
+        return r;
+    };
+    CategoricalColumn.prototype.getCategories = function (row) {
+        return this.getValues(row);
     };
     CategoricalColumn.prototype.getColor = function (row) {
-        var cat = this.getLabel(row);
+        var cat = this.getFirstLabel(row);
         if (cat === null || cat === '') {
             return null;
         }
         return this.colors(cat);
+    };
+    CategoricalColumn.prototype.getColors = function (row) {
+        return this.getLabels(row).map(this.colors);
     };
     CategoricalColumn.prototype.dump = function (toDescRef) {
         var r = _super.prototype.dump.call(this, toDescRef);
         r.filter = this.filter_;
         r.colors = {
             domain: this.colors.domain(),
-            range: this.colors.range()
+            range: this.colors.range(),
+            separator: this.separator
         };
         return r;
     };
@@ -1031,6 +1307,7 @@ var CategoricalColumn = (function (_super) {
         if (dump.colors) {
             this.colors.domain(dump.colors.domain).range(dump.colors.range);
         }
+        this.separator = dump.separator || this.separator;
     };
     CategoricalColumn.prototype.isFiltered = function () {
         return this.filter_ != null;
@@ -1039,17 +1316,19 @@ var CategoricalColumn = (function (_super) {
         if (!this.isFiltered()) {
             return true;
         }
-        var r = this.getLabel(row), filter = this.filter_;
-        if (Array.isArray(filter) && filter.length > 0) {
-            return filter.indexOf(r) >= 0;
-        }
-        else if (typeof filter === 'string' && filter.length > 0) {
-            return r && r.toLowerCase().indexOf(filter.toLowerCase()) >= 0;
-        }
-        else if (filter instanceof RegExp) {
-            return r != null && r.match(filter).length > 0;
-        }
-        return true;
+        var vs = this.getValues(row), filter = this.filter_;
+        return vs.every(function (v) {
+            if (Array.isArray(filter) && filter.length > 0) {
+                return filter.indexOf(v) >= 0;
+            }
+            else if (typeof filter === 'string' && filter.length > 0) {
+                return v && v.toLowerCase().indexOf(filter.toLowerCase()) >= 0;
+            }
+            else if (filter instanceof RegExp) {
+                return v != null && v.match(filter).length > 0;
+            }
+            return true;
+        });
     };
     CategoricalColumn.prototype.getFilter = function () {
         return this.filter_;
@@ -1058,7 +1337,15 @@ var CategoricalColumn = (function (_super) {
         this.fire(['filterChanged', 'dirtyValues', 'dirty'], this, this.filter_, this.filter_ = filter);
     };
     CategoricalColumn.prototype.compare = function (a, b) {
-        return StringColumn.prototype.compare.call(this, a, b);
+        var va = this.getValues(a);
+        var vb = this.getValues(b);
+        for (var i = 0; i < Math.min(va.length, vb.length); ++i) {
+            var ci = d3.ascending(va[i], vb[i]);
+            if (ci !== 0) {
+                return ci;
+            }
+        }
+        return va.length - vb.length;
     };
     return CategoricalColumn;
 })(ValueColumn);
@@ -1070,7 +1357,10 @@ var CategoricalNumberColumn = (function (_super) {
         this.colors = d3.scale.category10();
         this.scale = d3.scale.ordinal().rangeRoundPoints([0, 1]);
         this.filter_ = null;
-        CategoricalColumn.prototype.init.call(this, desc);
+        this.separator = ';';
+        this.combiner = d3.max;
+        this.separator = desc.separator || this.separator;
+        CategoricalColumn.prototype.initCategories.call(this, desc);
         this.scale.domain(this.colors.domain());
         if (desc.categories) {
             var values = [];
@@ -1102,28 +1392,60 @@ var CategoricalNumberColumn = (function (_super) {
         enumerable: true,
         configurable: true
     });
+    CategoricalNumberColumn.prototype.colorOf = function (cat) {
+        return this.colors(cat);
+    };
     CategoricalNumberColumn.prototype.getLabel = function (row) {
-        var v = _super.prototype.getValue.call(this, row);
-        if (typeof (v) === 'undefined' || v == null) {
-            return '';
-        }
-        return v;
+        return CategoricalColumn.prototype.getLabel.call(this, row);
+    };
+    CategoricalNumberColumn.prototype.getFirstLabel = function (row) {
+        return CategoricalColumn.prototype.getFirstLabel.call(this, row);
+    };
+    CategoricalNumberColumn.prototype.getLabels = function (row) {
+        return CategoricalColumn.prototype.getLabels.call(this, row);
     };
     CategoricalNumberColumn.prototype.getValue = function (row) {
-        var v = this.getLabel(row);
-        return this.scale(v);
+        var r = this.getValues(row);
+        return r.length > 0 ? this.combiner(r) : 0;
+    };
+    CategoricalNumberColumn.prototype.getValues = function (row) {
+        var r = CategoricalColumn.prototype.getValues.call(this, row);
+        return r.map(this.scale);
+    };
+    CategoricalNumberColumn.prototype.getCategories = function (row) {
+        return CategoricalColumn.prototype.getValues.call(this, row);
     };
     CategoricalNumberColumn.prototype.getNumber = function (row) {
         return this.getValue(row);
     };
     CategoricalNumberColumn.prototype.getColor = function (row) {
-        return CategoricalColumn.prototype.getColor.call(this, row);
+        var vs = this.getValues(row);
+        var cs = this.getColors(row);
+        if (this.combiner === d3.max) {
+            return cs.slice(1).reduce(function (prev, act, i) { return vs[i + 1] > prev.v ? { c: act, v: vs[i + 1] } : prev; }, {
+                c: cs[0],
+                v: vs[0]
+            }).c;
+        }
+        else if (this.combiner === d3.min) {
+            return cs.slice(1).reduce(function (prev, act, i) { return vs[i + 1] < prev.v ? { c: act, v: vs[i + 1] } : prev; }, {
+                c: cs[0],
+                v: vs[0]
+            }).c;
+        }
+        else {
+            return cs[0] || null;
+        }
+    };
+    CategoricalNumberColumn.prototype.getColors = function (row) {
+        return CategoricalColumn.prototype.getColors.call(this, row);
     };
     CategoricalNumberColumn.prototype.dump = function (toDescRef) {
         var r = CategoricalColumn.prototype.dump.call(this, toDescRef);
         r.scale = {
             domain: this.scale.domain(),
-            range: this.scale.range()
+            range: this.scale.range(),
+            separator: this.separator
         };
         return r;
     };
@@ -1132,6 +1454,7 @@ var CategoricalNumberColumn = (function (_super) {
         if (dump.scale) {
             this.scale.domain(dump.scale.domain).range(dump.scale.range);
         }
+        this.separator = dump.separator || this.separator;
     };
     CategoricalNumberColumn.prototype.getScale = function () {
         return {
@@ -1215,7 +1538,7 @@ var StackColumn = (function (_super) {
             if (this._collapsed === value) {
                 return;
             }
-            this.fire(['collapseChanged', 'dirtyHeader', 'dirty'], this._collapsed, this._collapsed = value);
+            this.fire(['collapseChanged', 'dirtyHeader', 'dirtyValues', 'dirty'], this._collapsed, this._collapsed = value);
         },
         enumerable: true,
         configurable: true
@@ -1225,8 +1548,8 @@ var StackColumn = (function (_super) {
         if (padding === void 0) { padding = 0; }
         var self = null;
         if (levelsToGo === 0 || levelsToGo <= Column.FLAT_ALL_COLUMNS) {
-            var w = this.getWidth();
-            if (!this.collapsed) {
+            var w = this.compressed ? Column.COMPRESSED_WIDTH : this.getWidth();
+            if (!this.collapsed && !this.compressed) {
                 w += (this.children_.length - 1) * padding;
             }
             r.push(self = { col: this, offset: offset, width: w });
@@ -1247,6 +1570,7 @@ var StackColumn = (function (_super) {
         var r = _super.prototype.dump.call(this, toDescRef);
         r.children = this.children_.map(function (d) { return d.dump(toDescRef); });
         r.missingValue = this.missingValue;
+        r.collapsed = this.collapsed;
         return r;
     };
     StackColumn.prototype.restore = function (dump, factory) {
@@ -1255,8 +1579,12 @@ var StackColumn = (function (_super) {
             this.missingValue = dump.missingValue;
         }
         dump.children.map(function (child) {
-            _this.push(factory(child));
+            var c = factory(child);
+            if (c) {
+                _this.push(c);
+            }
         });
+        this.collapsed = dump.collapsed === true;
         _super.prototype.restore.call(this, dump, factory);
     };
     StackColumn.prototype.insert = function (col, index, weight) {
@@ -1274,7 +1602,7 @@ var StackColumn = (function (_super) {
         this.forward(col, 'dirtyHeader.stack', 'dirtyValues.stack', 'dirty.stack', 'filterChanged.stack');
         col.on('widthChanged.stack', this.adaptChange);
         _super.prototype.setWidth.call(this, this.children_.length === 1 ? col.getWidth() : (this.getWidth() + col.getWidth()));
-        this.fire(['addColumn', 'dirtyHeader', 'dirtyValues', 'dirty'], col, col.getWidth() / this.getWidth());
+        this.fire(['addColumn', 'dirtyHeader', 'dirtyValues', 'dirty'], col, col.getWidth() / this.getWidth(), index);
         return true;
     };
     StackColumn.prototype.push = function (col, weight) {
@@ -1433,12 +1761,16 @@ var RankColumn = (function (_super) {
         var _this = this;
         _super.prototype.restore.call(this, dump, factory);
         dump.columns.map(function (child) {
-            _this.push(factory(child));
+            var c = factory(child);
+            if (c) {
+                _this.push(c);
+            }
         });
         if (dump.sortCriteria) {
             this.ascending = dump.sortCriteria.asc;
             if (dump.sortCriteria.sortBy) {
-                this.sortBy(this.columns_.filter(function (d) { return d.id === dump.sortCriteria.sortBy; })[0], dump.sortCriteria.asc);
+                var help = this.columns_.filter(function (d) { return d.id === dump.sortCriteria.sortBy; });
+                this.sortBy(help.length === 0 ? null : help[0], dump.sortCriteria.asc);
             }
         }
     };
@@ -1462,8 +1794,10 @@ var RankColumn = (function (_super) {
     };
     RankColumn.prototype.sortByMe = function (ascending) {
         if (ascending === void 0) { ascending = false; }
+        return false;
     };
     RankColumn.prototype.toggleMySorting = function () {
+        return false;
     };
     RankColumn.prototype.findMyRanker = function () {
         return this;
@@ -1515,7 +1849,7 @@ var RankColumn = (function (_super) {
         if (index === void 0) { index = this.columns_.length; }
         this.columns_.splice(index, 0, col);
         col.parent = this;
-        this.forward(col, 'dirtyValues.ranking', 'dirtyHeader.ranking', 'dirty.ranking');
+        this.forward(col, 'dirtyValues.ranking', 'dirtyHeader.ranking', 'dirty.ranking', 'filterChanged.ranking');
         col.on('filterChanged.order', this.dirtyOrder);
         this.fire(['addColumn', 'dirtyHeader', 'dirtyValues', 'dirty'], col, index);
         if (this.sortBy_ === null) {
@@ -1541,7 +1875,7 @@ var RankColumn = (function (_super) {
         if (i < 0) {
             return false;
         }
-        this.unforward(col, 'dirtyValues.ranking', 'dirtyHeader.ranking', 'dirty.ranking');
+        this.unforward(col, 'dirtyValues.ranking', 'dirtyHeader.ranking', 'dirty.ranking', 'filterChanged.ranking');
         col.parent = null;
         this.columns_.splice(i, 1);
         this.fire(['removeColumn', 'dirtyHeader', 'dirtyValues', 'dirty'], col);
@@ -1625,29 +1959,55 @@ function models() {
 exports.models = models;
 
 },{"./utils":8,"d3":undefined}],4:[function(require,module,exports){
-/**
- * Created by Samuel Gratzl on 14.08.2015.
- */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
-    __.prototype = b.prototype;
-    d.prototype = new __();
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
 };
 var model = require('./model');
 var utils = require('./utils');
 var d3 = require('d3');
 function computeStats(arr, acc, range) {
+    if (arr.length === 0) {
+        return {
+            min: NaN,
+            max: NaN,
+            mean: NaN,
+            count: 0,
+            maxBin: 0,
+            hist: []
+        };
+    }
     var hist = d3.layout.histogram().value(acc);
     if (range) {
         hist.range(function () { return range; });
     }
+    var ex = d3.extent(arr, acc);
     var hist_data = hist(arr);
     return {
-        min: hist_data[0].x,
-        max: hist_data[hist_data.length - 1].x + hist_data[hist_data.length - 1].dx,
+        min: ex[0],
+        max: ex[1],
+        mean: d3.mean(arr, acc),
         count: arr.length,
+        maxBin: d3.max(hist_data, function (d) { return d.y; }),
         hist: hist_data
+    };
+}
+function computeHist(arr, acc, categories) {
+    var m = d3.map();
+    categories.forEach(function (cat) { return m.set(cat, 0); });
+    arr.forEach(function (a) {
+        var vs = acc(a);
+        if (vs == null) {
+            return;
+        }
+        vs.forEach(function (v) {
+            m.set(v, (m.get(v) || 0) + 1);
+        });
+    });
+    return {
+        maxBin: d3.max(m.values()),
+        hist: m.entries().map(function (entry) { return ({ cat: entry.key, y: entry.value }); })
     };
 }
 var DataProvider = (function (_super) {
@@ -1660,12 +2020,11 @@ var DataProvider = (function (_super) {
         this.columnTypes = model.models();
         var that = this;
         this.reorder = function () {
-            var ranking = this.source;
-            that.sort(ranking).then(function (order) { return ranking.setOrder(order); });
+            that.triggerReorder(this.source);
         };
     }
     DataProvider.prototype.createEventList = function () {
-        return _super.prototype.createEventList.call(this).concat(['addColumn', 'removeColumn', 'addRanking', 'removeRanking', 'dirty', 'dirtyHeader', 'dirtyValues', 'selectionChanged']);
+        return _super.prototype.createEventList.call(this).concat(['addColumn', 'removeColumn', 'addRanking', 'removeRanking', 'dirty', 'dirtyHeader', 'dirtyValues', 'orderChanged', 'selectionChanged']);
     };
     DataProvider.prototype.getColumns = function () {
         return [];
@@ -1677,16 +2036,19 @@ var DataProvider = (function (_super) {
     };
     DataProvider.prototype.pushRankingImpl = function (r) {
         this.rankings_.push(r);
-        this.forward(r, 'addColumn.provider', 'removeColumn.provider', 'dirty.provider', 'dirtyHeader.provider', 'dirtyValues.provider');
+        this.forward(r, 'addColumn.provider', 'removeColumn.provider', 'dirty.provider', 'dirtyHeader.provider', 'orderChanged.provider', 'dirtyValues.provider');
         r.on('dirtyOrder.provider', this.reorder);
         this.fire(['addRanking', 'dirtyHeader', 'dirtyValues', 'dirty'], r);
+    };
+    DataProvider.prototype.triggerReorder = function (ranking) {
+        this.sort(ranking).then(function (order) { return ranking.setOrder(order); });
     };
     DataProvider.prototype.removeRanking = function (ranking) {
         var i = this.rankings_.indexOf(ranking);
         if (i < 0) {
             return false;
         }
-        this.unforward(ranking, 'addColumn.provider', 'removeColumn.provider', 'dirty.provider', 'dirtyHeader.provider', 'dirtyOrder.provider', 'dirtyValues.provider');
+        this.unforward(ranking, 'addColumn.provider', 'removeColumn.provider', 'dirty.provider', 'dirtyHeader.provider', 'orderChanged.provider', 'dirtyOrder.provider', 'dirtyValues.provider');
         this.rankings_.splice(i, 1);
         ranking.on('dirtyOrder.provider', null);
         this.cleanUpRanking(ranking);
@@ -1722,6 +2084,17 @@ var DataProvider = (function (_super) {
         }
         return null;
     };
+    DataProvider.prototype.insert = function (ranking, index, desc) {
+        var r = this.create(desc);
+        if (r) {
+            ranking.insert(r, index);
+            return r;
+        }
+        return null;
+    };
+    DataProvider.prototype.nextId = function () {
+        return 'col' + (this.uid++);
+    };
     DataProvider.prototype.create = function (desc) {
         var type = this.columnTypes[desc.type];
         if (type) {
@@ -1754,17 +2127,6 @@ var DataProvider = (function (_super) {
         }
         return null;
     };
-    DataProvider.prototype.insert = function (ranking, index, desc) {
-        var r = this.create(desc);
-        if (r) {
-            ranking.insert(r, index);
-            return r;
-        }
-        return null;
-    };
-    DataProvider.prototype.nextId = function () {
-        return 'col' + (this.uid++);
-    };
     DataProvider.prototype.dump = function () {
         var _this = this;
         return {
@@ -1786,9 +2148,12 @@ var DataProvider = (function (_super) {
         var _this = this;
         var create = function (d) {
             var desc = _this.fromDescRef(d.desc);
-            var type = _this.columnTypes[desc.type];
-            var c = new type(d.id, desc);
-            c.restore(d, create);
+            var c = null;
+            if (desc && desc.type) {
+                var type = _this.columnTypes[desc.type];
+                c = new type(d.id, desc);
+                c.restore(d, create);
+            }
             return c;
         };
         this.clearRankings();
@@ -1832,27 +2197,27 @@ var DataProvider = (function (_super) {
                 return null;
             }
             if (column.type === 'actions') {
-                var r = _this.create(model.createActionDesc(column.label || 'actions'));
-                r.restore(column);
-                return r;
+                var r_1 = _this.create(model.createActionDesc(column.label || 'actions'));
+                r_1.restore(column, null);
+                return r_1;
             }
             if (column.type === 'stacked') {
-                var r = _this.create(model.StackColumn.desc(column.label || 'Combined'));
+                var r_2 = _this.create(model.StackColumn.desc(column.label || 'Combined'));
                 (column.children || []).forEach(function (col) {
                     var c = toCol(col);
                     if (c) {
-                        r.push(c);
+                        r_2.push(c);
                     }
                 });
-                return r;
+                return r_2;
             }
             else {
                 var desc = _this.findDesc(column.column);
                 if (desc) {
-                    var r = _this.create(desc);
+                    var r_3 = _this.create(desc);
                     column.label = column.label || desc.label || desc.column;
-                    r.restore(column);
-                    return r;
+                    r_3.restore(column, null);
+                    return r_3;
                 }
             }
             return null;
@@ -1875,8 +2240,11 @@ var DataProvider = (function (_super) {
     DataProvider.prototype.mappingSample = function (col) {
         return Promise.reject('not implemented');
     };
-    DataProvider.prototype.stats = function (indices, col) {
-        return Promise.reject('not implemented');
+    DataProvider.prototype.stats = function (indices) {
+        return {
+            stats: function (col) { return Promise.reject('not implemented'); },
+            hist: function (col) { return Promise.reject('not implemented'); }
+        };
     };
     DataProvider.prototype.rowKey = function (row, i) {
         return typeof (row) === 'number' ? String(row) : String(row._index);
@@ -1898,6 +2266,10 @@ var DataProvider = (function (_super) {
         this.fire('selectionChanged', this.selection.values().map(Number));
     };
     DataProvider.prototype.setSelection = function (indices) {
+        var _this = this;
+        if (this.selection.size() === indices.length && indices.every(function (i) { return _this.selection.has(String(i)); })) {
+            return;
+        }
         this.selection = d3.set();
         this.selectAll(indices);
     };
@@ -1941,6 +2313,34 @@ var DataProvider = (function (_super) {
     DataProvider.prototype.clearSelection = function () {
         this.selection = d3.set();
         this.fire('selectionChanged', []);
+    };
+    DataProvider.prototype.exportTable = function (ranking, options) {
+        if (options === void 0) { options = {}; }
+        var op = {
+            separator: '\t',
+            newline: '\n',
+            header: true,
+            quote: false,
+            quoteChar: '"'
+        };
+        function quote(l, c) {
+            if (op.quote && (!c || !model.isNumberColumn(c))) {
+                return op.quoteChar + l + op.quoteChar;
+            }
+            return l;
+        }
+        utils.merge(op, options);
+        var columns = ranking.flatColumns;
+        return this.view(ranking.getOrder()).then(function (data) {
+            var r = [];
+            if (op.header) {
+                r.push(columns.map(function (d) { return quote(d.label); }).join(op.separator));
+            }
+            data.forEach(function (row) {
+                r.push(columns.map(function (c) { return quote(c.getLabel(row), c); }).join(op.separator));
+            });
+            return r.join(op.newline);
+        });
     };
     return DataProvider;
 })(utils.AEventDispatcher);
@@ -1997,14 +2397,28 @@ var CommonDataProvider = (function (_super) {
 exports.CommonDataProvider = CommonDataProvider;
 var LocalDataProvider = (function (_super) {
     __extends(LocalDataProvider, _super);
-    function LocalDataProvider(data, columns) {
+    function LocalDataProvider(data, columns, options) {
         if (columns === void 0) { columns = []; }
+        if (options === void 0) { options = {}; }
         _super.call(this, columns);
         this.data = data;
+        this.options = {
+            filterGlobally: false
+        };
+        utils.merge(this.options, options);
         data.forEach(function (d, i) {
             d._rankings = {};
             d._index = i;
         });
+        var that = this;
+        this.reorderall = function () {
+            var ranking = this.source;
+            that.getRankings().forEach(function (r) {
+                if (r !== ranking) {
+                    r.dirtyOrder();
+                }
+            });
+        };
     }
     LocalDataProvider.prototype.cloneRanking = function (existing) {
         var _this = this;
@@ -2024,14 +2438,26 @@ var LocalDataProvider = (function (_super) {
                 _this.push(new_, child.desc);
             });
         }
+        if (this.options.filterGlobally) {
+            new_.on('filterChanged.reorderall', this.reorderall);
+        }
         return new_;
     };
     LocalDataProvider.prototype.cleanUpRanking = function (ranking) {
+        if (this.options.filterGlobally) {
+            ranking.on('filterChanged.reorderall', null);
+        }
         this.data.forEach(function (d) { return delete d._rankings[ranking.id]; });
     };
     LocalDataProvider.prototype.sort = function (ranking) {
         var helper = this.data.map(function (r, i) { return ({ row: r, i: i, prev: r._rankings[ranking.id] || 0 }); });
-        if (ranking.isFiltered()) {
+        if (this.options.filterGlobally) {
+            var filtered = this.getRankings().filter(function (d) { return d.isFiltered(); });
+            if (filtered.length > 0) {
+                helper = helper.filter(function (d) { return filtered.every(function (f) { return f.filter(d.row); }); });
+            }
+        }
+        else if (ranking.isFiltered()) {
             helper = helper.filter(function (d) { return ranking.filter(d.row); });
         }
         helper.sort(function (a, b) { return ranking.comparator(a.row, b.row); });
@@ -2046,11 +2472,17 @@ var LocalDataProvider = (function (_super) {
         var slice = indices.map(function (index) { return _this.data[index]; });
         return Promise.resolve(slice);
     };
+    LocalDataProvider.prototype.stats = function (indices) {
+        var _this = this;
+        var d = null;
+        var getD = function () { return d === null ? (d = _this.view(indices)) : d; };
+        return {
+            stats: function (col) { return getD().then(function (data) { return computeStats(data, col.getNumber.bind(col), [0, 1]); }); },
+            hist: function (col) { return getD().then(function (data) { return computeHist(data, col.getCategories.bind(col), col.categories); }); }
+        };
+    };
     LocalDataProvider.prototype.mappingSample = function (col) {
         return Promise.resolve(this.data.map(col.getRawValue.bind(col)));
-    };
-    LocalDataProvider.prototype.stats = function (indices, col) {
-        return Promise.resolve(computeStats(this.data, col.getNumber.bind(col), [0, 1]));
     };
     LocalDataProvider.prototype.searchSelect = function (search, col) {
         var f = typeof search === 'string' ? function (v) { return v.indexOf(search) >= 0; } : function (v) { return v.match(search) != null; };
@@ -2114,30 +2546,33 @@ var RemoteDataProvider = (function (_super) {
 exports.RemoteDataProvider = RemoteDataProvider;
 
 },{"./model":3,"./utils":8,"d3":undefined}],5:[function(require,module,exports){
-/**
- * Created by Samuel Gratzl on 14.08.2015.
- */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
-    __.prototype = b.prototype;
-    d.prototype = new __();
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
 };
+var model = require('./model');
 var DefaultCellRenderer = (function () {
     function DefaultCellRenderer() {
         this.textClass = 'text';
         this.align = 'left';
     }
     DefaultCellRenderer.prototype.render = function ($col, col, rows, context) {
-        var _this = this;
         var $rows = $col.datum(col).selectAll('text.' + this.textClass).data(rows, context.rowKey);
         $rows.enter().append('text').attr({
             'class': this.textClass,
             'clip-path': 'url(#' + context.idPrefix + 'clipCol' + col.id + ')',
             y: function (d, i) { return context.cellPrevY(i); }
         });
+        var alignmentShift = 2;
+        if (this.align === 'right') {
+            alignmentShift = col.getWidth() - 5;
+        }
+        else if (this.align === 'center') {
+            alignmentShift = col.getWidth() * 0.5;
+        }
         $rows.attr({
-            x: function (d, i) { return context.cellX(i) + (_this.align === 'right' ? col.getWidth() - 5 : 0); },
+            x: function (d, i) { return context.cellX(i) + alignmentShift; },
             'data-index': function (d, i) { return i; }
         }).text(function (d) { return col.getLabel(d); });
         context.animated($rows).attr({
@@ -2186,7 +2621,7 @@ var BarCellRenderer = (function (_super) {
         var _this = this;
         var $rows = $col.datum(col).selectAll('rect.bar').data(rows, context.rowKey);
         $rows.enter().append('rect').attr({
-            'class': 'bar',
+            'class': 'bar ' + col.cssClass,
             x: function (d, i) { return context.cellX(i); },
             y: function (d, i) { return context.cellPrevY(i) + context.option('rowPadding', 1); },
             width: function (d) {
@@ -2239,7 +2674,7 @@ var HeatMapCellRenderer = (function (_super) {
         var _this = this;
         var $rows = $col.datum(col).selectAll('rect.heatmap').data(rows, context.rowKey);
         $rows.enter().append('rect').attr({
-            'class': 'bar',
+            'class': 'bar ' + col.cssClass,
             x: function (d, i) { return context.cellX(i); },
             y: function (d, i) { return context.cellPrevY(i) + context.option('rowPadding', 1); },
             width: function (d, i) { return context.rowHeight(i) - context.option('rowPadding', 1) * 2; }
@@ -2262,8 +2697,8 @@ var HeatMapCellRenderer = (function (_super) {
         if (isNaN(v)) {
             v = 0;
         }
-        var color = d3.hsl(col.color);
-        color.h = v;
+        var color = d3.hsl(col.color || model.Column.DEFAULT_COLOR);
+        color.l = v;
         return color.toString();
     };
     HeatMapCellRenderer.prototype.findRow = function ($col, index) {
@@ -2377,29 +2812,37 @@ var LinkCellRenderer = (function (_super) {
         _super.apply(this, arguments);
     }
     LinkCellRenderer.prototype.render = function ($col, col, rows, context) {
-        var $rows = $col.datum(col).selectAll('a.link').data(rows, context.rowKey);
-        $rows.enter().append('a').attr({
-            'class': 'link',
-            'target': '_blank'
-        }).append('text').attr({
-            'class': 'text',
+        var $rows = $col.datum(col).selectAll('text.link').data(rows, context.rowKey);
+        $rows.enter().append('text').attr({
+            'class': 'text link',
             'clip-path': 'url(#' + context.idPrefix + 'clipCol' + col.id + ')',
             y: function (d, i) { return context.cellPrevY(i); }
         });
         $rows.attr({
             x: function (d, i) { return context.cellX(i); },
-            'xlink:href': function (d) { return col.getValue(d); },
             'data-index': function (d, i) { return i; }
-        }).select('text').text(function (d) { return col.getLabel(d); });
-        context.animated($rows).select('text').attr({
+        }).html(function (d) { return col.isLink(d) ? "<a class=\"link\" xlink:href=\"" + col.getValue(d) + "\" target=\"_blank\">" + col.getLabel(d) + "</a>" : col.getLabel(d); });
+        context.animated($rows).attr({
             y: function (d, i) { return context.cellY(i); }
         });
         $rows.exit().remove();
     };
     LinkCellRenderer.prototype.findRow = function ($col, index) {
-        return $col.selectAll('a.link[data-index="' + index + '"]');
+        return $col.selectAll('text.link[data-index="' + index + '"]');
     };
     return LinkCellRenderer;
+})(DefaultCellRenderer);
+var StringCellRenderer = (function (_super) {
+    __extends(StringCellRenderer, _super);
+    function StringCellRenderer() {
+        _super.apply(this, arguments);
+    }
+    StringCellRenderer.prototype.render = function ($col, col, rows, context) {
+        this.align = col.alignment;
+        this.textClass = 'text' + (col.alignment === 'left' ? '' : '_' + col.alignment);
+        return _super.prototype.render.call(this, $col, col, rows, context);
+    };
+    return StringCellRenderer;
 })(DefaultCellRenderer);
 var CategoricalRenderer = (function (_super) {
     __extends(CategoricalRenderer, _super);
@@ -2490,7 +2933,7 @@ var StackCellRenderer = (function (_super) {
     };
     StackCellRenderer.prototype.render = function ($col, stack, rows, context) {
         this.renderImpl($col, stack, context, function ($child, col, i, ccontext) {
-            ccontext.renderer(col).render($child, col, rows, ccontext);
+            ccontext.render(col, $child, rows, ccontext);
         }, function (index) { return rows[index]; });
     };
     StackCellRenderer.prototype.mouseEnter = function ($col, $row, stack, row, index, context) {
@@ -2516,13 +2959,14 @@ var StackCellRenderer = (function (_super) {
 })(DefaultCellRenderer);
 function renderers() {
     return {
-        string: defaultRenderer(),
+        string: new StringCellRenderer(),
         link: new LinkCellRenderer(),
         number: barRenderer(),
         rank: defaultRenderer({
             textClass: 'rank',
             align: 'right'
         }),
+        heatmap: new HeatMapCellRenderer(),
         stack: new StackCellRenderer(),
         categorical: new CategoricalRenderer(),
         ordinal: barRenderer({
@@ -2537,17 +2981,12 @@ function renderers() {
 }
 exports.renderers = renderers;
 
-},{}],6:[function(require,module,exports){
-/**
- * Created by Samuel Gratzl on 14.08.2015.
- */
+},{"./model":3}],6:[function(require,module,exports){
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
-    __.prototype = b.prototype;
-    d.prototype = new __();
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
 };
-///<reference path='../typings/tsd.d.ts' />
 var d3 = require('d3');
 var utils = require('./utils');
 var model = require('./model');
@@ -2656,12 +3095,16 @@ var PoolRenderer = (function () {
             });
         }
         $headers_enter.append('span').classed('label', true).text(function (d) { return d.label; });
+        $headers.attr('class', function (d) { return ("header " + (d.cssClass || '') + " " + d.type); });
         $headers.style({
             'transform': function (d, i) {
                 var pos = _this.layout(i);
                 return 'translate(' + pos.x + 'px,' + pos.y + 'px)';
             },
-            'background-color': function (d) { return d.color || model.Column.DEFAULT_COLOR; }
+            'background-color': function (d) {
+                var s = d;
+                return s.cssClass ? null : s.color || model.Column.DEFAULT_COLOR;
+            }
         });
         $headers.attr({
             title: function (d) { return d.label; }
@@ -2712,12 +3155,19 @@ var HeaderRenderer = (function () {
         this.options = {
             slopeWidth: 150,
             columnPadding: 5,
+            headerHistogramHeight: 40,
             headerHeight: 20,
             manipulative: true,
+            histograms: false,
             filterDialogs: dialogs.filterDialogs(),
             searchAble: function (col) { return col instanceof model.StringColumn; },
-            sortOnLabel: true
+            sortOnLabel: true,
+            autoRotateLabels: false,
+            rotationHeight: 50,
+            rotationDegree: -20,
+            freezeCols: 0
         };
+        this.histCache = d3.map();
         this.dragHandler = d3.behavior.drag()
             .on('dragstart', function () {
             d3.select(this).classed('dragging', true);
@@ -2765,14 +3215,92 @@ var HeaderRenderer = (function () {
         this.changeDataStorage(data);
     }
     HeaderRenderer.prototype.changeDataStorage = function (data) {
+        var _this = this;
         if (this.data) {
-            this.data.on('dirtyHeader.headerRenderer', null);
+            this.data.on(['dirtyHeader.headerRenderer', 'orderChanged.headerRenderer', 'selectionChanged.headerRenderer'], null);
         }
         this.data = data;
         data.on('dirtyHeader.headerRenderer', utils.delayedCall(this.update.bind(this), 1));
+        if (this.options.histograms) {
+            data.on('orderChanged.headerRenderer', function () {
+                _this.updateHist();
+                _this.update();
+            });
+            data.on('selectionChanged.headerRenderer', utils.delayedCall(this.drawSelection.bind(this), 1));
+        }
+    };
+    Object.defineProperty(HeaderRenderer.prototype, "sharedHistCache", {
+        get: function () {
+            return this.histCache;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    HeaderRenderer.prototype.currentHeight = function () {
+        return parseInt(this.$node.style('height'), 10);
+    };
+    HeaderRenderer.prototype.updateHist = function () {
+        var _this = this;
+        var rankings = this.data.getRankings();
+        rankings.forEach(function (ranking) {
+            var order = ranking.getOrder();
+            var cols = ranking.flatColumns;
+            var histo = order == null ? null : _this.data.stats(order);
+            cols.filter(function (d) { return d instanceof model.NumberColumn; }).forEach(function (col) {
+                _this.histCache.set(col.id, histo === null ? null : histo.stats(col));
+            });
+            cols.filter(model.isCategoricalColumn).forEach(function (col) {
+                _this.histCache.set(col.id, histo === null ? null : histo.hist(col));
+            });
+        });
+    };
+    HeaderRenderer.prototype.drawSelection = function () {
+        var _this = this;
+        if (!this.options.histograms) {
+            return;
+        }
+        var node = this.$node.node();
+        [].slice.call(node.querySelectorAll('div.bar')).forEach(function (d) { return d.classList.remove('selected'); });
+        var indices = this.data.getSelection();
+        if (indices.length <= 0) {
+            return;
+        }
+        this.data.view(indices).then(function (data) {
+            var rankings = _this.data.getRankings();
+            rankings.forEach(function (ranking) {
+                var cols = ranking.flatColumns;
+                cols.filter(function (d) { return d instanceof model.NumberColumn; }).forEach(function (col) {
+                    var bars = [].slice.call(node.querySelectorAll("div.header[data-id=\"" + col.id + "\"] div.bar"));
+                    data.forEach(function (d) {
+                        var v = col.getValue(d);
+                        for (var i = 1; i < bars.length; ++i) {
+                            var bar = bars[i];
+                            if (bar.dataset.x > v) {
+                                bars[i - 1].classList.add('selected');
+                                break;
+                            }
+                            else if (i === bars.length - 1) {
+                                bar.classList.add('selected');
+                                break;
+                            }
+                        }
+                    });
+                });
+                cols.filter(model.isCategoricalColumn).forEach(function (col) {
+                    var header = node.querySelector("div.header[data-id=\"" + col.id + "\"]");
+                    data.forEach(function (d) {
+                        var cats = col.getCategories(d);
+                        (cats || []).forEach(function (cat) {
+                            header.querySelector("div.bar[data-cat=\"" + cat + "\"]").classList.add('selected');
+                        });
+                    });
+                });
+            });
+        });
     };
     HeaderRenderer.prototype.update = function () {
         var _this = this;
+        var that = this;
         var rankings = this.data.getRankings();
         var shifts = [], offset = 0;
         rankings.forEach(function (ranking) {
@@ -2780,15 +3308,36 @@ var HeaderRenderer = (function () {
         });
         offset -= this.options.slopeWidth;
         var columns = shifts.map(function (d) { return d.col; });
+        if (this.options.histograms && this.histCache.empty() && rankings.length > 0) {
+            this.updateHist();
+        }
+        this.renderColumns(columns, shifts);
         function countStacked(c) {
-            if (c instanceof model.StackColumn && !c.collapsed) {
+            if (c instanceof model.StackColumn && !c.collapsed && !c.compressed) {
                 return 1 + Math.max.apply(Math, c.children.map(countStacked));
             }
             return 1;
         }
         var levels = Math.max.apply(Math, columns.map(countStacked));
-        this.$node.style('height', this.options.headerHeight * levels + 'px');
-        this.renderColumns(columns, shifts);
+        var height = (this.options.histograms ? this.options.headerHistogramHeight : this.options.headerHeight) + (levels - 1) * this.options.headerHeight;
+        if (this.options.autoRotateLabels) {
+            var rotatedAny = false;
+            this.$node.selectAll('div.header')
+                .style('height', height + 'px').select('div.lu-label').each(function (d) {
+                var w = this.querySelector('span.lu-label').offsetWidth;
+                var actWidth = d.getWidth();
+                if (w > (actWidth + 30)) {
+                    d3.select(this).style('transform', "rotate(" + that.options.rotationDegree + "deg)");
+                    rotatedAny = true;
+                }
+                else {
+                    d3.select(this).style('transform', null);
+                }
+            });
+            this.$node.selectAll('div.header').style('margin-top', rotatedAny ? this.options.rotationHeight + 'px' : null);
+            height += rotatedAny ? this.options.rotationHeight : 0;
+        }
+        this.$node.style('height', height + 'px');
     };
     HeaderRenderer.prototype.createToolbar = function ($node) {
         var _this = this;
@@ -2807,12 +3356,28 @@ var HeaderRenderer = (function () {
             r.push(provider.clone(d));
             d3.event.stopPropagation();
         });
+        $node.filter(function (d) { return d instanceof model.LinkColumn; }).append('i').attr('class', 'fa fa-external-link').attr('title', 'Edit Link Pattern').on('click', function (d) {
+            dialogs.openEditLinkDialog(d, d3.select(this.parentNode.parentNode));
+            d3.event.stopPropagation();
+        });
         $node.filter(function (d) { return filterDialogs.hasOwnProperty(d.desc.type); }).append('i').attr('class', 'fa fa-filter').attr('title', 'Filter').on('click', function (d) {
             filterDialogs[d.desc.type](d, d3.select(this.parentNode.parentNode), provider);
             d3.event.stopPropagation();
         });
         $node.filter(function (d) { return _this.options.searchAble(d); }).append('i').attr('class', 'fa fa-search').attr('title', 'Search').on('click', function (d) {
             dialogs.openSearchDialog(d, d3.select(this.parentNode.parentNode), provider);
+            d3.event.stopPropagation();
+        });
+        $regular.append('i')
+            .attr('class', 'fa')
+            .classed('fa-toggle-left', function (d) { return !d.compressed; })
+            .classed('fa-toggle-right', function (d) { return d.compressed; })
+            .attr('title', '(Un)Collapse')
+            .on('click', function (d) {
+            d.compressed = !d.compressed;
+            d3.select(this)
+                .classed('fa-toggle-left', !d.compressed)
+                .classed('fa-toggle-right', d.compressed);
             d3.event.stopPropagation();
         });
         $stacked.append('i')
@@ -2839,6 +3404,12 @@ var HeaderRenderer = (function () {
             }
             d3.event.stopPropagation();
         });
+    };
+    HeaderRenderer.prototype.updateFreeze = function (left) {
+        var numColumns = this.options.freezeCols;
+        this.$node.selectAll('div.header')
+            .style('z-index', function (d, i) { return i < numColumns ? 1 : null; })
+            .style('transform', function (d, i) { return i < numColumns ? "translate(" + left + "px,0)" : null; });
     };
     HeaderRenderer.prototype.renderColumns = function (columns, shifts, $base, clazz) {
         var _this = this;
@@ -2876,13 +3447,18 @@ var HeaderRenderer = (function () {
                 .call(this.dropHandler);
             $headers_enter.append('div').classed('toolbar', true).call(this.createToolbar.bind(this));
         }
+        if (this.options.histograms) {
+            $headers_enter.append('div').classed('histogram', true);
+        }
         $headers.style({
             width: function (d, i) { return (shifts[i].width + _this.options.columnPadding) + 'px'; },
             left: function (d, i) { return shifts[i].offset + 'px'; },
             'background-color': function (d) { return d.color; }
         });
         $headers.attr({
-            title: function (d) { return d.label; }
+            'class': function (d) { return (clazz + " " + (d.cssClass || '') + " " + (d.compressed ? 'compressed' : '') + " " + d.headerCssClass + " " + (_this.options.autoRotateLabels ? 'rotateable' : '') + " " + (d.isFiltered() ? 'filtered' : '')); },
+            title: function (d) { return d.label; },
+            'data-id': function (d) { return d.id; },
         });
         $headers.select('i.sort_indicator').attr('class', function (d) {
             var r = d.findMyRanker();
@@ -2894,7 +3470,7 @@ var HeaderRenderer = (function () {
         $headers.select('span.lu-label').text(function (d) { return d.label; });
         var that = this;
         $headers.filter(function (d) { return d instanceof model.StackColumn; }).each(function (col) {
-            if (col.collapsed) {
+            if (col.collapsed || col.compressed) {
                 d3.select(this).selectAll('div.' + clazz + '_i').remove();
             }
             else {
@@ -2921,6 +3497,58 @@ var HeaderRenderer = (function () {
             }
             return d.push(col);
         }));
+        if (this.options.histograms) {
+            $headers.filter(function (d) { return model.isCategoricalColumn(d); }).each(function (col) {
+                var $this = d3.select(this).select('div.histogram');
+                var hist = that.histCache.get(col.id);
+                if (hist) {
+                    hist.then(function (stats) {
+                        var $bars = $this.selectAll('div.bar').data(stats.hist);
+                        $bars.enter().append('div').classed('bar', true);
+                        var sx = d3.scale.ordinal().domain(col.categories).rangeBands([0, 100], 0.1);
+                        var sy = d3.scale.linear().domain([0, stats.maxBin]).range([0, 100]);
+                        $bars.style({
+                            left: function (d) { return sx(d.cat) + '%'; },
+                            width: function (d) { return sx.rangeBand() + '%'; },
+                            top: function (d) { return (100 - sy(d.y)) + '%'; },
+                            height: function (d) { return sy(d.y) + '%'; },
+                            'background-color': function (d) { return col.colorOf(d.cat); }
+                        }).attr({
+                            title: function (d) { return (d.cat + ": " + d.y); },
+                            'data-cat': function (d) { return d.cat; }
+                        });
+                        $bars.exit().remove();
+                    });
+                }
+            });
+            $headers.filter(function (d) { return d instanceof model.NumberColumn; }).each(function (col) {
+                var $this = d3.select(this).select('div.histogram');
+                var hist = that.histCache.get(col.id);
+                if (hist) {
+                    hist.then(function (stats) {
+                        var $bars = $this.selectAll('div.bar').data(stats.hist);
+                        $bars.enter().append('div').classed('bar', true);
+                        var sx = d3.scale.ordinal().domain(d3.range(stats.hist.length).map(String)).rangeBands([0, 100], 0.1);
+                        var sy = d3.scale.linear().domain([0, stats.maxBin]).range([0, 100]);
+                        $bars.style({
+                            left: function (d, i) { return sx(String(i)) + '%'; },
+                            width: function (d, i) { return sx.rangeBand() + '%'; },
+                            top: function (d) { return (100 - sy(d.y)) + '%'; },
+                            height: function (d) { return sy(d.y) + '%'; }
+                        }).attr({
+                            title: function (d, i) { return ("Bin " + i + ": " + d.y); },
+                            'data-x': function (d) { return d.x; }
+                        });
+                        $bars.exit().remove();
+                        var $mean = $this.select('div.mean');
+                        if ($mean.empty()) {
+                            $mean = $this.append('div').classed('mean', true);
+                        }
+                        $mean.style('left', (stats.mean * 100) + '%');
+                    });
+                }
+            });
+        }
         $headers.exit().remove();
     };
     return HeaderRenderer;
@@ -2944,8 +3572,12 @@ var BodyRenderer = (function (_super) {
             animation: false,
             animationDuration: 1000,
             renderers: renderer.renderers(),
-            actions: []
+            meanLine: false,
+            actions: [],
+            freezeCols: 0
         };
+        this.currentFreezeLeft = 0;
+        this.histCache = d3.map();
         utils.merge(this.options, options);
         this.$node = d3.select(parent).append('svg').classed('lu-body', true);
         this.changeDataStorage(data);
@@ -2988,17 +3620,32 @@ var BodyRenderer = (function (_super) {
                 return options.rowHeight * (1 - options.rowPadding);
             },
             renderer: function (col) {
+                if (col.compressed && model.isNumberColumn(col)) {
+                    return options.renderers.heatmap;
+                }
                 if (col instanceof model.StackColumn && col.collapsed) {
                     return options.renderers.number;
                 }
                 var l = options.renderers[col.desc.type];
                 return l || renderer.defaultRenderer();
             },
+            render: function (col, $this, data, context) {
+                if (context === void 0) { context = this; }
+                var tthis = ($this.node());
+                var old_renderer = tthis.__renderer__;
+                var act_renderer = this.renderer(col);
+                if (old_renderer !== act_renderer) {
+                    $this.selectAll('*').remove();
+                    tthis.__renderer__ = act_renderer;
+                }
+                act_renderer.render($this, col, data, context);
+            },
             showStacked: function (col) {
                 return options.stacked;
             },
             idPrefix: options.idPrefix,
             animated: function ($sel) { return options.animation ? $sel.transition().duration(options.animationDuration) : $sel; },
+            showMeanLine: function (col) { return options.meanLine && model.isNumberColumn(col) && !col.compressed && col.parent instanceof model.RankColumn; },
             option: function (key, default_) { return (key in options) ? options[key] : default_; }
         };
     };
@@ -3031,9 +3678,21 @@ var BodyRenderer = (function (_super) {
             offset += w + _this.options.slopeWidth;
         });
         this.updateClipPathsImpl(shifts.map(function (s) { return s.col; }), context, height);
+        var $elem = this.$node.select('clipPath#c' + context.idPrefix + 'Freeze');
+        if ($elem.empty()) {
+            $elem = this.$node.append('clipPath').attr('id', 'c' + context.idPrefix + 'Freeze').append('rect').attr({
+                y: 0,
+                width: 20000,
+                height: height
+            });
+        }
+        $elem.select('rect').attr({
+            height: height
+        });
     };
-    BodyRenderer.prototype.renderRankings = function ($body, rankings, orders, shifts, context) {
+    BodyRenderer.prototype.renderRankings = function ($body, rankings, orders, shifts, context, height) {
         var _this = this;
+        var that = this;
         var dataPromises = orders.map(function (r) { return _this.data.view(r); });
         var $rankings = $body.selectAll('g.ranking').data(rankings, function (d) { return d.id; });
         var $rankings_enter = $rankings.enter().append('g').attr({
@@ -3045,13 +3704,14 @@ var BodyRenderer = (function (_super) {
         context.animated($rankings).attr({
             transform: function (d, i) { return 'translate(' + shifts[i].shift + ',0)'; }
         });
-        var $cols = $rankings.select('g.cols').selectAll('g.child').data(function (d) { return [d].concat(d.children); }, function (d) { return d.id; });
-        $cols.enter().append('g').attr({
+        var $cols = $rankings.select('g.cols').selectAll('g.uchild').data(function (d) { return [d].concat(d.children); }, function (d) { return d.id; });
+        $cols.enter().append('g').attr('class', 'uchild')
+            .append('g').attr({
             'class': 'child',
-            transform: function (d, i, j) {
-                return 'translate(' + shifts[j].shifts[i] + ',0)';
-            }
+            transform: function (d, i, j) { return 'translate(' + shifts[j].shifts[i] + ',0)'; }
         });
+        $cols.exit().remove();
+        $cols = $cols.select('g.child');
         $cols.attr({
             'data-index': function (d, i) { return i; }
         });
@@ -3060,19 +3720,34 @@ var BodyRenderer = (function (_super) {
                 return 'translate(' + shifts[j].shifts[i] + ',0)';
             }
         }).each(function (d, i, j) {
-            var _this = this;
+            var $col = d3.select(this);
             dataPromises[j].then(function (data) {
-                context.renderer(d).render(d3.select(_this), d, data, context);
+                context.render(d, $col, data, context);
             });
+            if (context.showMeanLine(d)) {
+                var h = that.histCache.get(d.id);
+                if (h) {
+                    h.then(function (stats) {
+                        var $mean = $col.selectAll('line.meanline').data([stats.mean]);
+                        $mean.enter().append('line').attr('class', 'meanline');
+                        $mean.exit().remove();
+                        $mean.attr('x1', d.getWidth() * stats.mean)
+                            .attr('x2', d.getWidth() * stats.mean)
+                            .attr('y2', height);
+                    });
+                }
+            }
+            else {
+                $col.selectAll('line.meanline').remove();
+            }
         });
-        $cols.exit().remove();
         function mouseOverRow($row, $cols, index, ranking, rankingIndex) {
             $row.classed('hover', true);
-            var $value_cols = $row.select('g.values').selectAll('g.child').data([ranking].concat(ranking.children), function (d) { return d.id; });
+            var $value_cols = $row.select('g.values').selectAll('g.uchild').data([ranking].concat(ranking.children), function (d) { return d.id; });
             $value_cols.enter().append('g').attr({
-                'class': 'child'
-            });
-            $value_cols.attr({
+                'class': 'uchild'
+            }).append('g').classed('child', true);
+            $value_cols.select('g.child').attr({
                 transform: function (d, i) {
                     return 'translate(' + shifts[rankingIndex].shifts[i] + ',0)';
                 }
@@ -3086,10 +3761,10 @@ var BodyRenderer = (function (_super) {
         }
         function mouseLeaveRow($row, $cols, index, ranking, rankingIndex) {
             $row.classed('hover', false);
-            $row.select('g.values').selectAll('g.child').each(function (d, i) {
+            $row.select('g.values').selectAll('g.uchild').each(function (d, i) {
                 var _this = this;
                 dataPromises[rankingIndex].then(function (data) {
-                    context.renderer(d).mouseLeave($cols.selectAll('g.child[data-index="' + i + '"]'), d3.select(_this), d, data[index], index, context);
+                    context.renderer(d).mouseLeave($cols.selectAll('g.child[data-index="' + i + '"]'), d3.select(_this).select('g.child'), d, data[index], index, context);
                 });
             }).remove();
         }
@@ -3109,6 +3784,7 @@ var BodyRenderer = (function (_super) {
                     }
                 }
             });
+            that.updateFrozenRows();
         };
         var $rows = $rankings.select('g.rows').selectAll('g.row').data(function (d, i) { return orders[i].map(function (d, i) { return ({ d: d, i: i }); }); });
         var $rows_enter = $rows.enter().append('g').attr({
@@ -3202,6 +3878,37 @@ var BodyRenderer = (function (_super) {
         $lines.exit().remove();
         $slopes.exit().remove();
     };
+    BodyRenderer.prototype.updateFreeze = function (left) {
+        var _this = this;
+        var numColumns = this.options.freezeCols;
+        var $cols = this.$node.select('g.cols');
+        var $n = this.$node.select('#c' + this.options.idPrefix + 'Freeze').select('rect');
+        var $col = $cols.select("g.child[data-index=\"" + numColumns + "\"]");
+        if ($col.empty()) {
+            $col = $cols.select('g.child:last-of-type');
+        }
+        var x = d3.transform($col.attr('transform') || '').translate[0];
+        $n.attr('x', left + x);
+        $cols.selectAll('g.uchild').attr({
+            'clip-path': function (d, i) { return i < numColumns ? null : 'url(#c' + _this.options.idPrefix + 'Freeze)'; },
+            'transform': function (d, i) { return i < numColumns ? 'translate(' + left + ',0)' : null; }
+        });
+        this.currentFreezeLeft = left;
+        this.updateFrozenRows();
+    };
+    BodyRenderer.prototype.updateFrozenRows = function () {
+        var _this = this;
+        var numColumns = this.options.freezeCols;
+        if (numColumns <= 0) {
+            return;
+        }
+        var left = this.currentFreezeLeft;
+        var $rows = this.$node.select('g.rows');
+        $rows.select('g.row.hover g.values').selectAll('g.uchild').attr({
+            'clip-path': function (d, i) { return i < numColumns ? null : 'url(#c' + _this.options.idPrefix + 'Freeze)'; },
+            'transform': function (d, i) { return i < numColumns ? 'translate(' + left + ',0)' : null; }
+        });
+    };
     BodyRenderer.prototype.update = function () {
         var _this = this;
         var rankings = this.data.getRankings();
@@ -3221,8 +3928,8 @@ var BodyRenderer = (function (_super) {
             offset += _this.options.slopeWidth;
             var o2 = 0, shift2 = [d].concat(d.children).map(function (o) {
                 var r = o2;
-                o2 += o.getWidth() + _this.options.columnPadding;
-                if (o instanceof model.StackColumn && !o.collapsed) {
+                o2 += (o.compressed ? model.Column.COMPRESSED_WIDTH : o.getWidth()) + _this.options.columnPadding;
+                if (o instanceof model.StackColumn && !o.collapsed && !o.compressed) {
                     o2 += _this.options.columnPadding * (o.length - 1);
                 }
                 return r;
@@ -3243,7 +3950,7 @@ var BodyRenderer = (function (_super) {
         if ($body.empty()) {
             $body = this.$node.append('g').classed('body', true);
         }
-        this.renderRankings($body, rankings, orders, shifts, context);
+        this.renderRankings($body, rankings, orders, shifts, context, height);
         this.renderSlopeGraphs($body, rankings, orders, shifts, context);
     };
     return BodyRenderer;
@@ -3251,9 +3958,6 @@ var BodyRenderer = (function (_super) {
 exports.BodyRenderer = BodyRenderer;
 
 },{"./model":3,"./renderer":5,"./ui_dialogs":7,"./utils":8,"d3":undefined}],7:[function(require,module,exports){
-/**
- * Created by Samuel Gratzl on 24.08.2015.
- */
 var utils = require('./utils');
 var mappingeditor = require('./mappingeditor');
 function dialogForm(title, body, buttonsWithLabel) {
@@ -3299,6 +4003,19 @@ function openRenameDialog(column, $header) {
     });
 }
 exports.openRenameDialog = openRenameDialog;
+function openEditLinkDialog(column, $header) {
+    var t = "<input type=\"text\" size=\"15\" value=\"" + column.getLink() + "\" required=\"required\" autofocus=\"autofocus\"><br>";
+    var popup = makePopup($header, 'Edit Link ($ as Placeholder)', t);
+    popup.select('.ok').on('click', function () {
+        var newValue = popup.select('input[type="text"]').property('value');
+        column.setLink(newValue);
+        popup.remove();
+    });
+    popup.select('.cancel').on('click', function () {
+        popup.remove();
+    });
+}
+exports.openEditLinkDialog = openEditLinkDialog;
 function openSearchDialog(column, $header, provider) {
     var popup = makePopup($header, 'Search', '<input type="text" size="15" value="" required="required" autofocus="autofocus"><br><label><input type="checkbox">RegExp</label><br>');
     popup.select('input[type="text"]').on('input', function () {
@@ -3314,10 +4031,12 @@ function openSearchDialog(column, $header, provider) {
     function updateImpl() {
         var search = popup.select('input[type="text"]').property('value');
         var isRegex = popup.select('input[type="text"]').property('checked');
-        if (isRegex) {
-            search = new RegExp(search);
+        if (search.length > 0) {
+            if (isRegex) {
+                search = new RegExp(search);
+            }
+            provider.searchSelect(search, column);
         }
-        provider.searchSelect(search, column);
         popup.remove();
     }
     popup.select('input[type="checkbox"]').on('change', updateImpl);
@@ -3343,7 +4062,7 @@ function openEditWeightsDialog(column, $header) {
         redraw();
     });
     $rows_enter.append('td').append('div')
-        .attr('class', 'bar')
+        .attr('class', function (d) { return 'bar ' + d.col.cssClass; })
         .style('background-color', function (d) { return d.col.color; });
     $rows_enter.append('td').text(function (d) { return d.col.label; });
     function redraw() {
@@ -3364,6 +4083,10 @@ function openEditWeightsDialog(column, $header) {
     });
 }
 exports.openEditWeightsDialog = openEditWeightsDialog;
+function markFiltered($header, filtered) {
+    if (filtered === void 0) { filtered = false; }
+    $header.classed('filtered', filtered);
+}
 function openCategoricalFilter(column, $header) {
     var bak = column.getFilter() || [];
     var popup = makePopup($header, 'Edit Filter', '<div class="selectionTable"><table><thead><th></th><th>Category</th></thead><tbody></tbody></table></div>');
@@ -3387,7 +4110,7 @@ function openCategoricalFilter(column, $header) {
     }
     redraw();
     function updateData(filter) {
-        $header.select('i.fa-filter').classed('filtered', (filter && filter.length > 0 && filter.length < column.categories.length));
+        markFiltered($header, filter && filter.length > 0 && filter.length < column.categories.length);
         column.setFilter(filter);
     }
     popup.select('.cancel').on('click', function () {
@@ -3412,7 +4135,7 @@ function openStringFilter(column, $header) {
     var bak = column.getFilter() || '';
     var $popup = makePopup($header, 'Filter', "<input type=\"text\" placeholder=\"containing...\" autofocus=\"true\" size=\"15\" value=\"" + ((bak instanceof RegExp) ? bak.source : bak) + "\" autofocus=\"autofocus\">\n    <br><label><input type=\"checkbox\" " + ((bak instanceof RegExp) ? 'checked="checked"' : '') + ">RegExp</label>\n    <br>");
     function updateData(filter) {
-        $header.select('i.fa-filter').classed('filtered', (filter && filter !== ''));
+        markFiltered($header, (filter && filter !== ''));
         column.setFilter(filter);
     }
     function updateImpl(force) {
@@ -3444,8 +4167,7 @@ function openStringFilter(column, $header) {
     });
 }
 function openMappingEditor(column, $header, data) {
-    var pos = utils.offset($header.node()), bak = column.getMapping(), original = column.getOriginalMapping();
-    var act = d3.scale.linear().domain(bak.domain).range(bak.range);
+    var pos = utils.offset($header.node()), bak = column.getMapping(), original = column.getOriginalMapping(), act = bak.clone();
     var popup = d3.select('body').append('div')
         .attr({
         'class': 'lu-popup'
@@ -3461,11 +4183,11 @@ function openMappingEditor(column, $header, data) {
     $filterIt.property('checked', column.isFiltered());
     function applyMapping(newscale) {
         act = newscale;
-        $header.select('i.fa-filter').classed('filtered', !isSame(act.range(), original.range) || !isSame(act.domain(), original.domain));
-        column.setMapping(act.domain(), act.range());
+        markFiltered($header, !newscale.eq(original));
+        column.setMapping(newscale);
         var val = $filterIt.property('checked');
         if (val) {
-            column.setFilter(newscale.domain()[0], newscale.domain()[1]);
+            column.setFilter(newscale.domain[0], newscale.domain[1]);
         }
         else {
             column.setFilter();
@@ -3476,27 +4198,22 @@ function openMappingEditor(column, $header, data) {
         triggerCallback: 'dragend'
     };
     var data_sample = data.mappingSample(column);
-    var editor = mappingeditor.open(d3.scale.linear().domain(bak.domain).range(bak.range), original.domain, data_sample, editorOptions);
-    popup.select('.mappingArea').call(editor);
-    function isSame(a, b) {
-        return a[0] === b[0] && a[1] === b[1];
-    }
+    var editor = mappingeditor.create(popup.select('.mappingArea').node(), act, original, data_sample, editorOptions);
     popup.select('.ok').on('click', function () {
-        applyMapping(act);
+        applyMapping(editor.scale);
         popup.remove();
     });
     popup.select('.cancel').on('click', function () {
-        column.setMapping(bak.domain, bak.range);
-        $header.classed('filtered', !isSame(bak.range, original.range) || !isSame(bak.domain, original.domain));
+        column.setMapping(bak);
+        markFiltered($header, !bak.eq(original));
         popup.remove();
     });
     popup.select('.reset').on('click', function () {
         bak = original;
-        act = d3.scale.linear().domain(bak.domain).range(bak.range);
+        act = bak.clone();
         applyMapping(act);
-        editor = mappingeditor.open(d3.scale.linear().domain(bak.domain).range(bak.range), original.domain, data_sample, editorOptions);
         popup.selectAll('.mappingArea *').remove();
-        popup.select('.mappingArea').call(editor);
+        editor = mappingeditor.create(popup.select('.mappingArea').node(), act, original, data_sample, editorOptions);
     });
 }
 function openCategoricalMappingEditor(column, $header) {
@@ -3548,16 +4265,11 @@ function filterDialogs() {
 exports.filterDialogs = filterDialogs;
 
 },{"./mappingeditor":2,"./utils":8}],8:[function(require,module,exports){
-/**
- * Created by Samuel Gratzl on 14.08.2015.
- */
 var __extends = (this && this.__extends) || function (d, b) {
     for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
     function __() { this.constructor = d; }
-    __.prototype = b.prototype;
-    d.prototype = new __();
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
 };
-///<reference path='../typings/tsd.d.ts' />
 var d3 = require('d3');
 function delayedCall(callback, timeToDelay, thisCallback) {
     if (timeToDelay === void 0) { timeToDelay = 100; }
@@ -3703,7 +4415,7 @@ var ContentScroller = (function (_super) {
         this.container = container;
         this.content = content;
         this.options = {
-            topShift: 0,
+            topShift: function () { return 0; },
             backupRows: 5,
             rowHeight: 10
         };
@@ -3712,13 +4424,13 @@ var ContentScroller = (function (_super) {
         merge(this.options, options);
         d3.select(container).on('scroll.scroller', function () { return _this.onScroll(); });
         this.prevScrollTop = container.scrollTop;
-        this.shift = offset(content).top - offset(container).top + this.options.topShift;
+        this.shift = offset(content).top - offset(container).top;
     }
     ContentScroller.prototype.createEventList = function () {
         return _super.prototype.createEventList.call(this).concat(['scroll', 'redraw']);
     };
     ContentScroller.prototype.select = function (start, length, row2y) {
-        var top = this.container.scrollTop - this.shift, bottom = top + this.container.clientHeight, i = 0, j;
+        var top = this.container.scrollTop - this.shift - this.options.topShift(), bottom = top + this.container.clientHeight, i = 0, j;
         if (top > 0) {
             i = Math.round(top / this.options.rowHeight);
             while (i >= start && row2y(i + 1) > top) {
